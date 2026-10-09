@@ -1,5 +1,5 @@
 /**
- * Buyee Shipping Manifest & Landed Cost Parser Engine
+ * Buyee Shipping Manifest & Landed Cost Parser Engine (with Automatic OCR Fallback)
  */
 
 if (typeof pdfjsLib !== 'undefined') {
@@ -92,7 +92,6 @@ async function handleFileUpload(file) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
-        // Reconstruct coherent text lines using item Y-coordinates & hasEOL
         const pageLines = [];
         let currentLine = [];
         let lastY = null;
@@ -129,14 +128,15 @@ async function handleFileUpload(file) {
         fullText += pageLines.join('\n') + '\n';
       }
 
-      document.getElementById('rawTextArea').value = fullText;
-
-      if (!fullText.trim()) {
-        showStatus(`No text layer found in ${file.name}. (If scanned image, use 'Paste / View Raw Text' tab).`, true);
-        return;
+      // If no text layer found, run Tesseract.js OCR automatically
+      if (!fullText.trim() || fullText.trim().length < 30) {
+        showStatus(`No embedded text detected in ${file.name}. Running browser OCR engine...`, false);
+        fullText = await performOcrOnPdf(pdf);
       }
 
+      document.getElementById('rawTextArea').value = fullText;
       parseManifestText(fullText, file.name);
+
     } else {
       const text = await file.text();
       document.getElementById('rawTextArea').value = text;
@@ -146,6 +146,38 @@ async function handleFileUpload(file) {
     console.error("PDF Reading Error:", err);
     showStatus(`Error reading PDF: ${err.message}`, true);
   }
+}
+
+/**
+ * Optical Character Recognition (OCR) Engine for Scanned Image PDFs
+ */
+async function performOcrOnPdf(pdf) {
+  let ocrText = '';
+  if (typeof Tesseract === 'undefined') {
+    showStatus("Tesseract OCR library not loaded. Check internet connection.", true);
+    return "";
+  }
+
+  const worker = await Tesseract.createWorker('eng');
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    showStatus(`Scanning page ${pageNum} of ${pdf.numPages} using OCR...`, false);
+    const page = await pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 2.0 });
+
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+
+    await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+    const { data } = await worker.recognize(canvas);
+    ocrText += data.text + '\n';
+  }
+
+  await worker.terminate();
+  return ocrText;
 }
 
 function showStatus(msg, isError) {
@@ -174,18 +206,15 @@ function parseManifestText(rawText, fileName) {
   const clearanceFee = extractPriceNumber(cleanText, /Customs\s*Clearance\s*Fee[\s\S]*?([\d,\.]{3,})/i);
   const otherFees = buyeeFee + clearanceFee;
 
-  // Split flexibly across "Shopping Site" regardless of pipes or line breaks
   const siteParts = cleanText.split(/Shopping[\s|]*Site/i);
   const rawItems = [];
 
   for (let i = 1; i < siteParts.length; i++) {
     const block = siteParts[i].split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Customs\s*Duties|Breakdown\s*of\s*Other)/i)[0];
 
-    // Order ID: 8-20 alphanumeric characters inside parentheses
     const idMatch = block.match(/\(\s*([A-Za-z0-9_-]{8,20})[\s\vert{}]*\)/i);
     const orderId = idMatch ? idMatch[1].trim() : "N/A";
 
-    // Site Name: Match shop name preceding or near order ID
     let siteName = "Buyee Site";
     if (orderId !== "N/A") {
       const siteMatch = block.match(new RegExp('([A-Za-z0-9_ \\.-]+?)\\s*\\(\\s*' + orderId, 'i'));
@@ -194,7 +223,6 @@ function parseManifestText(rawText, fileName) {
       }
     }
 
-    // Item Name: text between Item Name and Quantity
     const nameMatch = block.match(/Item[\s|]*Name[\s|]*\n?([\s\S]+?)(?=\n?[\s|]*Quantity)/i);
     let itemName = "Item";
     if (nameMatch) {
@@ -204,11 +232,9 @@ function parseManifestText(rawText, fileName) {
       itemName = lines.join(' ');
     }
 
-    // Quantity
     const qtyMatch = block.match(/Quantity[\s\S]*?(\d+)/i);
     const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
-    // Prices
     const origPrice = extractPriceNumber(block, /Item[\s|]*Price[\s\S]*?([\d,\.]{3,})/i);
     const coupon = extractPriceNumber(block, /Coupon[\s|]*discount[\s\S]*?(-?[\d,\.]{3,})/i);
     let netPrice = extractPriceNumber(block, /Total[\s|]*Amount[\s\S]*?([\d,\.]{3,})/i);
@@ -254,7 +280,7 @@ function parseManifestText(rawText, fileName) {
   if (items.length > 0) {
     showStatus(`Successfully extracted ${items.length} item(s) from ${fileName}`, false);
   } else {
-    showStatus(`PDF text extracted, but no valid line items matched. Click 'Paste / View Raw Text' tab to inspect.`, true);
+    showStatus(`Document parsed, but no valid line items matched. Check 'Paste / View Raw Text' tab.`, true);
   }
 }
 
