@@ -1,7 +1,7 @@
-// PDF.js Worker Configuration
-if (typeof pdfjsLib !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-}
+// Global error catcher to display any script crashes directly on screen
+window.onerror = function(msg, url, line) {
+  updateStatus(`Error: ${msg} (Line ${line})`, true);
+};
 
 const STORAGE_KEY = 'buyee_inventory_data_v1';
 
@@ -30,15 +30,152 @@ let store = {
 
 document.addEventListener('DOMContentLoaded', () => {
   loadStoreFromLocalStorage();
-  lucide.createIcons();
+  safeCreateIcons();
   renderProjectDropdown();
   loadProjectUI();
   setupGlobalInputs();
-  setupFileInputs();
   setupDropZone();
 });
 
-// Helper to translate single text string (Client-Side)
+function safeCreateIcons() {
+  if (window.lucide && typeof lucide.createIcons === 'function') {
+    lucide.createIcons();
+  }
+}
+
+function updateStatus(msg, isError = false) {
+  const statusEl = document.getElementById('uploadStatus');
+  if (statusEl) {
+    statusEl.innerText = msg;
+    statusEl.className = isError 
+      ? "text-[11px] font-mono text-rose-300 mt-3 bg-rose-950/80 px-3 py-1 rounded border border-rose-800/50"
+      : "text-[11px] font-mono text-indigo-300 mt-3 bg-slate-900/80 px-3 py-1 rounded border border-indigo-900/50";
+  }
+}
+
+// Handler bound directly to file input change event
+window.handleFileSelect = async function(event) {
+  try {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    updateStatus(`Selected: ${file.name}. Reading PDF...`);
+    await window.processPdfFile(file);
+    event.target.value = '';
+  } catch(err) {
+    updateStatus("File selection error: " + err.message, true);
+  }
+};
+
+window.processPdfFile = async function(file) {
+  if (!file) return;
+
+  try {
+    if (typeof pdfjsLib === 'undefined') {
+      updateStatus("Error: PDF.js library failed to load.", true);
+      alert("PDF.js engine is not loaded on this page.");
+      return;
+    }
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    updateStatus("Opening PDF file...");
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    
+    updateStatus(`PDF loaded (${pdf.numPages} pages). Extracting text...`);
+    let fullText = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      updateStatus(`Extracting page ${i} of ${pdf.numPages}...`);
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      fullText += " " + textContent.items.map(item => item.str).join(' ');
+    }
+
+    updateStatus("Parsing Buyee order layout...");
+    const parsed = parseBuyeeTextStream(fullText);
+    
+    if (parsed.length > 0) {
+      getCurrentProject().items = [...parsed, ...getCurrentProject().items];
+      updateCalculations();
+      updateStatus(`Success: Imported ${parsed.length} order items!`);
+      alert(`Successfully imported ${parsed.length} orders!`);
+    } else {
+      updateStatus("No order records found in PDF format.", true);
+      alert("PDF read successfully, but no orders matched the expected Buyee receipt format.");
+    }
+  } catch (err) {
+    updateStatus("PDF Error: " + err.message, true);
+    alert("Error reading PDF: " + err.message);
+  }
+};
+
+function parseBuyeeTextStream(text) {
+  const items = [];
+  const currentTariff = getCurrentProject().tariffRate || 10;
+  const cleanText = text.replace(/Order\s*date([0-9])/gi, 'Order date $1');
+  const orderHeaderRegex = /([A-Z0-9]{10,14})\s*Order\s*date\s*(\d{1,2}\s+[A-Za-z]{3}\s+20\d{2})/gi;
+  const matches = [...cleanText.matchAll(orderHeaderRegex)];
+
+  if (matches.length === 0) return items;
+
+  matches.forEach((match, index) => {
+    const orderId = match[1].trim();
+    const orderDate = match[2].trim();
+    const startIndex = match.index;
+    const endIndex = (index < matches.length - 1) ? matches[index + 1].index : cleanText.length;
+    const block = cleanText.slice(startIndex, endIndex);
+
+    if (block.includes('out of stock') || block.includes('Order was cancelled')) return;
+
+    let seller = "Buyee Seller";
+    const sellerMatch = block.match(/(?:Shop Name|Seller)\s*([^\n\r]+?)(?=\s*(?:Total Amount|After your|Details|Purchase|Transaction|Quantity|Order date|$))/i);
+    if (sellerMatch && sellerMatch[1]) seller = sellerMatch[1].replace(/[-–—]\s*$/, '').trim();
+
+    let priceJPY = 0;
+    const jpyMatch = block.match(/(?:Requested Item Price|Item Price)\s*:?\s*([\d,]+)\s*YEN/i) || block.match(/Total Amount\s*:?\s*([\d,]+)\s*YEN/i);
+    if (jpyMatch) priceJPY = parseFloat(jpyMatch[1].replace(/,/g, '')) || 0;
+
+    let printedUSD = null;
+    const usdMatches = [...block.matchAll(/\(US\$\s*([\d,]+\.\d{2})\)/gi)];
+    if (usdMatches.length > 0) printedUSD = parseFloat(usdMatches[usdMatches.length - 1][1].replace(/,/g, ''));
+
+    let qty = 1;
+    const qtyMatch = block.match(/Quantity\s*(\d+|[lI])\s*item\(s\)/i);
+    if (qtyMatch) {
+      const rawQty = qtyMatch[1];
+      qty = (rawQty === 'l' || rawQty === 'I') ? 1 : (parseInt(rawQty, 10) || 1);
+    }
+
+    let rawTitle = "Proxy Purchase Item";
+    const qtyIdx = block.search(/Quantity\s*(\d+|[lI])\s*item\(s\)/i);
+    if (qtyIdx > 0) {
+      let snippet = block.slice(Math.max(0, qtyIdx - 160), qtyIdx).trim();
+      snippet = snippet.replace(/.*(?:Purchase request items|Transaction Delivery|Arrived at Warehouse|Shipped|Order Completed|Order Received|Details)\s*/gi, '').trim();
+      if (snippet.length > 0) rawTitle = snippet.slice(-120).replace(/^[\s•:-]+/, '').trim();
+    }
+
+    if (priceJPY > 0) {
+      items.push({
+        id: String(Date.now() + index + Math.random()),
+        orderDate: orderDate,
+        orderId: orderId,
+        itemTitle: rawTitle,
+        seller: seller,
+        qty: qty,
+        priceJPY: priceJPY,
+        printedUSD: printedUSD,
+        shippingUSD: 0,
+        feeUSD: 0,
+        tariffPercent: currentTariff,
+        selected: false
+      });
+    }
+  });
+
+  return items;
+}
+
 async function translateText(text) {
   if (!text || typeof text !== 'string') return text;
   const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
@@ -52,12 +189,11 @@ async function translateText(text) {
       return data[0].map(item => item[0]).join('');
     }
   } catch (err) {
-    console.warn("Translation skipped for item:", err);
+    console.warn("Translation skipped:", err);
   }
   return text;
 }
 
-// Function triggered by "Translate to English" button
 window.translateAllExistingItems = async function() {
   const p = getCurrentProject();
   if (!p.items || p.items.length === 0) {
@@ -68,19 +204,18 @@ window.translateAllExistingItems = async function() {
   const button = document.getElementById('translateBtn');
   if (button) button.innerText = "Translating...";
 
-  let translatedCount = 0;
+  let count = 0;
   for (let item of p.items) {
     item.itemTitle = await translateText(item.itemTitle);
     item.seller = await translateText(item.seller);
-    translatedCount++;
+    count++;
   }
 
   updateCalculations();
   if (button) button.innerText = "Translate to English";
-  alert(`Finished translating ${translatedCount} items!`);
+  alert(`Finished translating ${count} items!`);
 };
 
-// Force apply global settings (Tariff %, Shipping, Fees) across imported lines
 window.applyGlobalChangesToAllRows = function() {
   const p = getCurrentProject();
   if (!p.items || p.items.length === 0) {
@@ -118,14 +253,6 @@ function setupGlobalInputs() {
 
   const fxSelect = document.getElementById('fxMode');
   if (fxSelect) fxSelect.addEventListener('change', updateCalculations);
-}
-
-function setupFileInputs() {
-  const inputs = document.querySelectorAll('input[type="file"]');
-  inputs.forEach(input => {
-    input.removeEventListener('change', window.handleFileSelect);
-    input.addEventListener('change', window.handleFileSelect);
-  });
 }
 
 function setupDropZone() {
@@ -342,7 +469,7 @@ function renderTable() {
     `;
     tbody.appendChild(tr);
   });
-  lucide.createIcons();
+  safeCreateIcons();
 }
 
 function updateItemValue(id, key, val) {
@@ -367,24 +494,46 @@ function deleteSingleRow(id) { getCurrentProject().items = getCurrentProject().i
 function deleteSelectedRows() { getCurrentProject().items = getCurrentProject().items.filter(i => !i.selected); updateCalculations(); }
 function clearAllItems() { if(confirm('Clear all items in active project?')) { getCurrentProject().items = []; updateCalculations(); } }
 
-window.handleFileSelect = async function(event) {
-  try {
-    const file = event.target.files && event.target.files[0];
-    if (!file) return;
-    await window.processPdfFile(file);
-    event.target.value = '';
-  } catch(err) {
-    alert("Error selecting file: " + err.message);
-  }
-};
+function exportToExcel() {
+  const items = getCurrentProject().items;
+  const exportData = items.map((item, idx) => ({
+    'Row #': idx + 1, 'Date': item.orderDate, 'Order ID': item.orderId,
+    'Item Title': item.itemTitle, 'Seller': item.seller, 'Qty': item.qty,
+    'Unit Price ($USD)': item.unitPriceUSD.toFixed(2), 'FX Rate': item.fxRate.toFixed(5),     'Base Cost ($ USD)': item.itemCostUSD.toFixed(2), 'Shipping ($USD)': item.shippingUSD.toFixed(2),     'Fees ($ USD)': item.feeUSD.toFixed(2), 'Tariff Rate (%)': item.tariffPercent + '%',
+    'Tariff ($USD)': item.tariffUSD.toFixed(2), 'Landed Cost ($ USD)': item.landedCostUSD.toFixed(2)
+  }));
+  const ws = XLSX.utils.json_to_sheet(exportData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Inventory");
+  XLSX.writeFile(wb, `${getCurrentProject().name}_Report.xlsx`);
+}
 
-window.processPdfFile = async function(file) {
+function exportBackupJSON() {
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(store, null, 2));
+  const dlAnchor = document.createElement('a');
+  dlAnchor.setAttribute("href", dataStr);
+  dlAnchor.setAttribute("download", `buyee_inventory_backup_${Date.now()}.json`);
+  document.body.appendChild(dlAnchor);
+  dlAnchor.click();
+  dlAnchor.remove();
+}
+
+function importBackupJSON(event) {
+  const file = event.target.files[0];
   if (!file) return;
-
-  try {
-    if (typeof pdfjsLib === 'undefined') {
-      alert("Error: PDF.js library is not loaded.");
-      return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      store = JSON.parse(e.target.result);
+      saveStoreToLocalStorage();
+      renderProjectDropdown();
+      loadProjectUI();
+      alert('Backup restored successfully!');
+    } catch (err) {
+      alert('Invalid JSON backup file.');
     }
+  };
+  reader.readAsText(file);
+}
 
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '
+function escapeHtml(s) { return (s||'').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }

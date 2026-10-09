@@ -70,13 +70,14 @@
       
       <!-- PDF Upload Box -->
       <div id="dropZone" class="lg:col-span-1 border-2 border-dashed border-slate-700 hover:border-indigo-500 bg-slate-800/40 rounded-xl p-6 flex flex-col items-center justify-center text-center transition cursor-pointer relative group">
-        <input type="file" id="pdfFileInput" accept=".pdf" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
+        <input type="file" id="pdfFileInput" accept=".pdf" onchange="handleFileSelect(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
         
         <div class="p-3 bg-slate-800 rounded-full border border-slate-700 group-hover:border-indigo-500 text-indigo-400 mb-3 transition">
           <i data-lucide="file-up" class="w-6 h-6"></i>
         </div>
         <h3 class="text-sm font-semibold text-slate-200">Import Buyee Orders PDF</h3>
         <p class="text-xs text-slate-400 mt-1">Click to select file or drag & drop here</p>
+        <p id="uploadStatus" class="text-[11px] font-mono text-indigo-300 mt-3 bg-slate-900/80 px-3 py-1 rounded border border-indigo-900/50">Status: Ready for PDF</p>
       </div>
 
       <!-- Global Controls Panel -->
@@ -107,3 +108,123 @@
                 <option value="equal">Equal Split Per Item</option>
               </select>
             </div>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div class="col-span-2 sm:col-span-1">
+              <label class="block text-xs font-medium text-slate-300 mb-1">FX Conversion Mode</label>
+              <select id="fxMode" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="receipt">Receipt Print Rate</option>
+                <option value="historical">Order Date FX Table</option>
+                <option value="fixed">Fixed Rate (150 JPY/USD)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Buttons Bar -->
+        <div class="mt-5 pt-3 border-t border-slate-700/60 flex flex-wrap gap-2 justify-end">
+          <button id="translateBtn" onclick="translateAllExistingItems()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5">
+            <i data-lucide="languages" class="w-4 h-4"></i>
+            Translate to English
+          </button>
+
+          <button id="applyGlobalBtn" onclick="applyGlobalChangesToAllRows()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-1.5 rounded-lg text-xs shadow transition flex items-center gap-1.5">
+            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+            Apply Settings to All Rows
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary Statistics Dashboard -->
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
+      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Items</p>
+        <p id="statCount" class="text-xl font-bold text-slate-100 mt-1 font-mono">0</p>
+      </div>
+
+      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Base Item Total ($)</p>
+        <p id="statTotalUSD" class="text-xl font-bold text-sky-400 mt-1 font-mono">$0.00</p>
+      </div>
+
+      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Freight & Fees ($)</p>
+        <p id="statTotalFreightFees" class="text-xl font-bold text-slate-300 mt-1 font-mono">$0.00</p>
+      </div>
+
+      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Tariff ($)</p>
+        <p id="statTotalTariff" class="text-xl font-bold text-rose-400 mt-1 font-mono">$0.00</p>
+      </div>
+
+      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4 col-span-2 sm:col-span-1">
+        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Landed Cost ($)</p>
+        <p id="statTotalLanded" class="text-xl font-bold text-emerald-400 mt-1 font-mono">$0.00</p>
+      </div>
+    </div>
+
+    <!-- Table Section -->
+    <div class="bg-slate-800/60 border border-slate-700/80 rounded-xl overflow-hidden flex flex-col">
+      
+      <!-- Table Controls Bar -->
+      <div class="p-4 border-b border-slate-700/80 flex flex-wrap items-center justify-between gap-3 bg-slate-800/40">
+        <div class="flex items-center gap-3 flex-grow max-w-xs">
+          <div class="relative w-full">
+            <i data-lucide="search" class="w-4 h-4 absolute left-2.5 top-2.5 text-slate-400"></i>
+            <input type="text" id="searchInput" oninput="renderTable()" placeholder="Search title, seller, order ID..." class="w-full bg-slate-900 border border-slate-700 text-xs rounded-lg pl-8 pr-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <span id="displayedCountText" class="text-xs text-slate-400 mr-2">Showing 0 of 0 items</span>
+          
+          <button onclick="addNewRow()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Line
+          </button>
+
+          <button onclick="deleteSelectedRows()" class="bg-slate-700 hover:bg-rose-900/50 text-slate-200 hover:text-rose-300 text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete Selected
+          </button>
+
+          <button onclick="clearAllItems()" class="bg-slate-700 hover:bg-rose-900/80 text-slate-200 hover:text-rose-200 text-xs px-3 py-1.5 rounded-lg transition">
+            Clear All
+          </button>
+        </div>
+      </div>
+
+      <!-- Inventory Data Table -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-slate-200">
+          <thead class="bg-slate-900/80 text-slate-400 uppercase tracking-wider text-[10px] font-semibold border-b border-slate-700">
+            <tr>
+              <th class="p-3 text-center"><input type="checkbox" onchange="toggleSelectAll(this)"></th>
+              <th class="p-3">Order Date</th>
+              <th class="p-3">Order ID</th>
+              <th class="p-3">Item Title</th>
+              <th class="p-3">Seller</th>
+              <th class="p-3 text-right">Qty</th>
+              <th class="p-3 text-right">Unit Price ($)</th>
+              <th class="p-3 text-right">FX Rate</th>
+              <th class="p-3 text-right">Base Cost ($)</th>
+              <th class="p-3 text-right">Shipping ($)</th>
+              <th class="p-3 text-right">Fees ($)</th>
+              <th class="p-3 text-right">Tariff %</th>
+              <th class="p-3 text-right">Tariff ($)</th>
+              <th class="p-3 text-right">Landed Cost ($)</th>
+              <th class="p-3 text-center">Action</th>
+            </tr>
+          </thead>
+          <tbody id="inventoryTbody" class="divide-y divide-slate-700/50">
+            <!-- Dynamic items rendered by JavaScript -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- Application Logic -->
+  <script src="app.js"></script>
+</body>
+</html>
