@@ -1,5 +1,6 @@
 /**
- * Buyee Shipping Manifest & Landed Cost Parser Engine (Japanese CMap & Clean OCR Support)
+ * Buyee Shipping Manifest & Landed Cost Parser Engine
+ * Multi-Strategy OCR & Noise Filtered Version
  */
 
 const PDFJS_VERSION = '3.11.174';
@@ -87,7 +88,6 @@ async function handleFileUpload(file) {
     if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
       const arrayBuffer = await file.arrayBuffer();
       
-      // Load PDF with Japanese CMap support for embedded fonts
       const loadingTask = pdfjsLib.getDocument({
         data: arrayBuffer,
         cMapUrl: `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/cmaps/`,
@@ -137,9 +137,9 @@ async function handleFileUpload(file) {
         fullText += pageLines.join('\n') + '\n';
       }
 
-      // Fallback to OCR only if no text layer exists at all
+      // If text layer is missing or sparse (< 30 chars), perform document OCR
       if (!fullText.trim() || fullText.trim().length < 30) {
-        showStatus(`Scanned image detected in ${file.name}. Running document OCR...`, false);
+        showStatus(`Scanned image PDF detected in ${file.name}. Running document OCR...`, false);
         fullText = await performOcrOnPdf(pdf);
       }
 
@@ -158,7 +158,7 @@ async function handleFileUpload(file) {
 }
 
 /**
- * Clean OCR Engine configured for Document Page Layouts (PSM 6)
+ * Clean OCR Engine with Document Segmentation (PSM 6)
  */
 async function performOcrOnPdf(pdf) {
   let ocrText = '';
@@ -169,9 +169,8 @@ async function performOcrOnPdf(pdf) {
 
   const worker = await Tesseract.createWorker('eng');
 
-  // Configure Tesseract to treat page as uniform document block & preserve spacing
   await worker.setParameters({
-    tessedit_pageseg_mode: '6', // PSM 6: Assume a single uniform block of text
+    tessedit_pageseg_mode: '6',
     preserve_interword_spaces: '1'
   });
 
@@ -207,10 +206,15 @@ function showStatus(msg, isError) {
 }
 
 /**
- * Buyee Manifest Parser Engine
+ * Multi-Strategy Buyee Manifest Parser
  */
 function parseManifestText(rawText, fileName) {
-  const cleanText = rawText.replace(/\r/g, '');
+  // Step 1: Filter out border noise lines composed purely of =, -, _, —, |, +
+  const cleanLines = rawText.split('\n').filter(line => {
+    const s = line.strip ? line.strip() : line.trim();
+    return !/^[=\-_—\+\*\|I\s\.\,\:\;\/]+$/.test(s);
+  });
+  const cleanText = cleanLines.join('\n').replace(/\r/g, '');
 
   const packageRef = extractRegex(cleanText, /(?:Package\s*Reference\s*No|Package\s*Ref)[\s\S]*?([A-Z0-9]{8,15})/i, "N/A");
   const delivDate = extractRegex(cleanText, /Date\s*of\s*Delivery[\s\S]*?(\d{4}[-\/]\d{2}[-\/]\d{2})/i, "N/A");
@@ -221,45 +225,94 @@ function parseManifestText(rawText, fileName) {
   const clearanceFee = extractPriceNumber(cleanText, /Customs\s*Clearance\s*Fee[\s\S]*?([\d,\.]{3,})/i);
   const otherFees = buyeeFee + clearanceFee;
 
-  const siteParts = cleanText.split(/Shopping[\s|]*Site/i);
-  const rawItems = [];
+  let rawItems = [];
 
-  for (let i = 1; i < siteParts.length; i++) {
-    const block = siteParts[i].split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Customs\s*Duties|Breakdown\s*of\s*Other)/i)[0];
+  // Strategy 1: Header-based splitting on 'Shopping Site' (and OCR typo variations)
+  const siteParts = cleanText.split(/(?:Shopping|Shoppng|Snopping|Sh0pp1ng|Shop[a-z0-9]*)\s*Site/i);
 
-    const idMatch = block.match(/\(\s*([A-Za-z0-9_-]{8,20})[\s\vert{}]*\)/i);
-    const orderId = idMatch ? idMatch[1].trim() : "N/A";
+  if (siteParts.length > 1) {
+    for (let i = 1; i < siteParts.length; i++) {
+      const block = siteParts[i].split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Customs\s*Duties|Breakdown\s*of\s*Other)/i)[0];
 
-    let siteName = "Buyee Site";
-    if (orderId !== "N/A") {
-      const siteMatch = block.match(new RegExp('([A-Za-z0-9_ \\.-]+?)\\s*\\(\\s*' + orderId, 'i'));
+      const idMatch = block.match(/\(\s*([A-Za-z0-9_-]{8,20})[\s\vert{}]*\)/i);
+      const orderId = idMatch ? idMatch[1].trim() : "N/A";
+
+      let siteName = "Buyee Site";
+      if (orderId !== "N/A") {
+        const siteMatch = block.match(new RegExp('([A-Za-z0-9_ \\.-]+?)\\s*\\(\\s*' + orderId, 'i'));
+        if (siteMatch) {
+          siteName = siteMatch[1].replace(/\n/g, ' ').replace(/^[|\s]+/, '').trim();
+        }
+      }
+
+      const nameMatch = block.match(/Item[\s|]*Name[\s|]*\n?([\s\S]+?)(?=\n?[\s|]*Quantity|\n?[\s|]*Item[\s|]*Price)/i);
+      let itemName = "Item";
+      if (nameMatch) {
+        const lines = nameMatch[1].split('\n')
+          .map(l => l.replace(/^[|\s]+/, '').trim())
+          .filter(l => l && l !== '|');
+        itemName = lines.join(' ');
+      }
+
+      const qtyMatch = block.match(/Quantity[\s\S]*?(\d+)/i);
+      const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+
+      const origPrice = extractPriceNumber(block, /Item[\s|]*Price[\s\S]*?([\d,\.]{3,})/i);
+      const coupon = extractPriceNumber(block, /Coupon[\s|]*discount[\s\S]*?(-?[\d,\.]{3,})/i);
+      let netPrice = extractPriceNumber(block, /Total[\s|]*Amount[\s\S]*?([\d,\.]{3,})/i);
+
+      if (netPrice === 0 && origPrice > 0) {
+        netPrice = origPrice - coupon;
+      }
+
+      if (orderId !== "N/A" || netPrice > 0) {
+        rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });
+      }
+    }
+  }
+
+  // Strategy 2 (Fallback): Direct Order ID Parentheses Anchor Extraction
+  if (rawItems.length === 0) {
+    const itemSection = cleanText.split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Customs\s*Duties|Breakdown\s*of\s*Other)/i)[0];
+    const orderMatches = [...itemSection.matchAll(/\(\s*([A-Za-z0-9_-]{8,20})\s*\)/g)];
+
+    for (let idx = 0; idx < orderMatches.length; idx++) {
+      const match = orderMatches[idx];
+      const orderId = match[1].trim();
+
+      const startIdx = Math.max(0, match.index - 120);
+      const endIdx = (idx + 1 < orderMatches.length) ? orderMatches[idx + 1].index - 120 : itemSection.length;
+      const chunk = itemSection.substring(startIdx, endIdx);
+
+      let siteName = "Buyee Site";
+      const siteMatch = chunk.match(new RegExp('([A-Za-z0-9_ \\.-]+?)\\s*\\(\\s*' + orderId, 'i'));
       if (siteMatch) {
         siteName = siteMatch[1].replace(/\n/g, ' ').replace(/^[|\s]+/, '').trim();
       }
-    }
 
-    const nameMatch = block.match(/Item[\s|]*Name[\s|]*\n?([\s\S]+?)(?=\n?[\s|]*Quantity)/i);
-    let itemName = "Item";
-    if (nameMatch) {
-      const lines = nameMatch[1].split('\n')
-        .map(l => l.replace(/^[|\s]+/, '').trim())
-        .filter(l => l && l !== '|');
-      itemName = lines.join(' ');
-    }
+      const nameMatch = chunk.match(/Item[\s|]*Name[\s|]*\n?([\s\S]+?)(?=\n?[\s|]*Quantity|\n?[\s|]*Item[\s|]*Price|\n?[\s|]*Total[\s|]*Amount)/i);
+      let itemName = "Item";
+      if (nameMatch) {
+        const lines = nameMatch[1].split('\n')
+          .map(l => l.replace(/^[|\s]+/, '').trim())
+          .filter(l => l && l !== '|');
+        itemName = lines.join(' ');
+      }
 
-    const qtyMatch = block.match(/Quantity[\s\S]*?(\d+)/i);
-    const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+      const qtyMatch = chunk.match(/Quantity[\s\S]*?(\d+)/i);
+      const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
-    const origPrice = extractPriceNumber(block, /Item[\s|]*Price[\s\S]*?([\d,\.]{3,})/i);
-    const coupon = extractPriceNumber(block, /Coupon[\s|]*discount[\s\S]*?(-?[\d,\.]{3,})/i);
-    let netPrice = extractPriceNumber(block, /Total[\s|]*Amount[\s\S]*?([\d,\.]{3,})/i);
+      const origPrice = extractPriceNumber(chunk, /Item[\s|]*Price[\s\S]*?([\d,\.]{3,})/i);
+      const coupon = extractPriceNumber(chunk, /Coupon[\s|]*discount[\s\S]*?(-?[\d,\.]{3,})/i);
+      let netPrice = extractPriceNumber(chunk, /Total[\s|]*Amount[\s\S]*?([\d,\.]{3,})/i);
 
-    if (netPrice === 0 && origPrice > 0) {
-      netPrice = origPrice - coupon;
-    }
+      if (netPrice === 0 && origPrice > 0) {
+        netPrice = origPrice - coupon;
+      }
 
-    if (orderId !== "N/A" || netPrice > 0) {
-      rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });
+      if (!rawItems.some(i => i.orderId === orderId)) {
+        rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });
+      }
     }
   }
 
@@ -295,7 +348,7 @@ function parseManifestText(rawText, fileName) {
   if (items.length > 0) {
     showStatus(`Successfully extracted ${items.length} item(s) from ${fileName}`, false);
   } else {
-    showStatus(`Parsed document, but no item lines matched. Switch to 'Paste / View Raw Text' tab to inspect.`, true);
+    showStatus(`Document parsed, but no item lines matched. Switch to 'Paste / View Raw Text' tab to inspect.`, true);
   }
 }
 
