@@ -38,10 +38,32 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDropZone();
 });
 
-// Free client-side translation helper (Japanese to English)
+// Explicit action button function to push current inputs to all rows
+window.applyGlobalChangesToAllRows = function() {
+  const p = getCurrentProject();
+  if (!p.items || p.items.length === 0) {
+    alert("No imported lines to update.");
+    return;
+  }
+
+  const tariffVal = parseFloat(document.getElementById('globalTariffInput')?.value) || 0;
+  p.tariffRate = tariffVal;
+  p.shippingUSD = parseFloat(document.getElementById('globalShippingInput')?.value) || 0;
+  p.feesUSD = parseFloat(document.getElementById('globalFeesInput')?.value) || 0;
+  p.allocationStrategy = document.getElementById('allocationStrategy')?.value || 'proportional';
+  p.fxMode = document.getElementById('fxMode')?.value || 'receipt';
+
+  // Force overwrite item-level tariff rates with global rate
+  p.items.forEach(item => {
+    item.tariffPercent = tariffVal;
+  });
+
+  updateCalculations();
+  alert(`Applied settings (${tariffVal}% Tariff, $${p.shippingUSD.toFixed(2)} Shipping, $${p.feesUSD.toFixed(2)} Fees) to all ${p.items.length} items!`);
+};
+
 async function translateText(text) {
   if (!text || typeof text !== 'string') return text;
-  // Check if text contains Japanese Kanji, Hiragana, or Katakana
   const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
   if (!hasJapanese) return text;
 
@@ -53,13 +75,12 @@ async function translateText(text) {
       return data[0].map(item => item[0]).join('');
     }
   } catch (err) {
-    console.warn("Translation failed, keeping original:", err);
+    console.warn("Translation failed:", err);
   }
   return text;
 }
 
-// Function to translate all saved items in the active project
-async function translateAllExistingItems() {
+window.translateAllExistingItems = async function() {
   const p = getCurrentProject();
   if (!p.items || p.items.length === 0) {
     alert("No items to translate.");
@@ -77,11 +98,11 @@ async function translateAllExistingItems() {
   updateCalculations();
   if (button) button.innerText = "Translate to English";
   alert("Translation complete!");
-}
+};
 
 function setupGlobalInputs() {
   const tariffInput = document.getElementById('globalTariffInput');
-  if (tariffInput) tariffInput.addEventListener('input', handleGlobalTariffChange);
+  if (tariffInput) tariffInput.addEventListener('input', updateCalculations);
 
   const shippingInput = document.getElementById('globalShippingInput');
   if (shippingInput) shippingInput.addEventListener('input', updateCalculations);
@@ -94,14 +115,6 @@ function setupGlobalInputs() {
 
   const fxSelect = document.getElementById('fxMode');
   if (fxSelect) fxSelect.addEventListener('change', updateCalculations);
-}
-
-function handleGlobalTariffChange() {
-  const val = parseFloat(document.getElementById('globalTariffInput').value) || 0;
-  const p = getCurrentProject();
-  p.tariffRate = val;
-  p.items.forEach(item => { item.tariffPercent = val; });
-  updateCalculations();
 }
 
 function setupFileInputs() {
@@ -164,11 +177,11 @@ function renderProjectDropdown() {
 
 function loadProjectUI() {
   const p = getCurrentProject();
-  document.getElementById('globalTariffInput').value = p.tariffRate;
-  document.getElementById('globalShippingInput').value = p.shippingUSD;
-  document.getElementById('globalFeesInput').value = p.feesUSD;
-  document.getElementById('allocationStrategy').value = p.allocationStrategy;
-  document.getElementById('fxMode').value = p.fxMode;
+  if (document.getElementById('globalTariffInput')) document.getElementById('globalTariffInput').value = p.tariffRate;
+  if (document.getElementById('globalShippingInput')) document.getElementById('globalShippingInput').value = p.shippingUSD;
+  if (document.getElementById('globalFeesInput')) document.getElementById('globalFeesInput').value = p.feesUSD;
+  if (document.getElementById('allocationStrategy')) document.getElementById('allocationStrategy').value = p.allocationStrategy;
+  if (document.getElementById('fxMode')) document.getElementById('fxMode').value = p.fxMode;
   updateCalculations();
 }
 
@@ -224,11 +237,11 @@ function getFxRate(item, fxMode) {
 
 function updateCalculations() {
   const p = getCurrentProject();
-  p.tariffRate = parseFloat(document.getElementById('globalTariffInput').value) || 0;
-  p.shippingUSD = parseFloat(document.getElementById('globalShippingInput').value) || 0;
-  p.feesUSD = parseFloat(document.getElementById('globalFeesInput').value) || 0;
-  p.allocationStrategy = document.getElementById('allocationStrategy').value;
-  p.fxMode = document.getElementById('fxMode').value;
+  if (document.getElementById('globalTariffInput')) p.tariffRate = parseFloat(document.getElementById('globalTariffInput').value) || 0;
+  if (document.getElementById('globalShippingInput')) p.shippingUSD = parseFloat(document.getElementById('globalShippingInput').value) || 0;
+  if (document.getElementById('globalFeesInput')) p.feesUSD = parseFloat(document.getElementById('globalFeesInput').value) || 0;
+  if (document.getElementById('allocationStrategy')) p.allocationStrategy = document.getElementById('allocationStrategy').value;
+  if (document.getElementById('fxMode')) p.fxMode = document.getElementById('fxMode').value;
 
   const items = p.items;
   const totalQty = items.reduce((acc, i) => acc + (i.qty || 1), 0);
@@ -273,7 +286,7 @@ function updateCalculations() {
   if (statCount) statCount.innerText = items.length;
 
   const statTotalJPY = document.getElementById('statTotalJPY');
-  if (statTotalJPY) statTotalJPY.innerText = '$' + totalBaseUSD.toFixed(2); // Convert metric box to USD
+  if (statTotalJPY) statTotalJPY.innerText = '$' + totalBaseUSD.toFixed(2);
 
   const statTotalUSD = document.getElementById('statTotalUSD');
   if (statTotalUSD) statTotalUSD.innerText = '$' + totalBaseUSD.toFixed(2);
@@ -447,7 +460,6 @@ async function parseBuyeeTextStream(text) {
       if (snippet.length > 0) rawTitle = snippet.slice(-120).replace(/^[\s•:-]+/, '').trim();
     }
 
-    // Automatic translation to English
     const EnglishTitle = await translateText(rawTitle);
     const EnglishSeller = await translateText(seller);
 
