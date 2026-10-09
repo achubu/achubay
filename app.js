@@ -1,117 +1,58 @@
 /**
- * Buyee Shipping Manifest & Landed Cost Parser Engine
+ * Buyee Shipping Manifest & Landed Cost Parser Engine (Robust Version)
  */
 
-// Sample Manifest Data corresponding to Buyee Ref W2610049618
-const SAMPLE_MANIFEST_TEXT = `
-Buyee
-Shipper
-Aleksey Chubukov
-129 Granite Street Malden Massachusetts United States of America
-Postal Code 02148 TEL 16172851272
-Delivery Address
-Aleksey Chubukov 129 Granite Street Malden Massachusetts United States of America
-Postal Code 02148 TEL 16172851272
-powered by tenso
-
-Breakdown of Expenses
-Package Reference No. W2610049618
-Date of Delivery 2026-10-07
-Delivery Method ECMS
-Shipment Tracking No. ECTS000002110528
-
-Shopping Site(ID)
- | mercari (M26092602488)
-Item Name
- | 1st Edition LOB-005
-Quantity
- | 1
-Item Price
- | 22,222
-Coupon discount
- | -3,333
-Total Amount
- | 18,889
-
-Shopping Site(ID)
- | JDirectItems Fleamarket (126100101969)
-Item Name
- | BLEACH SR EX15BT/BLC-4-027
-Quantity
- | 1
-Item Price
- | 122,000
-Coupon discount
- | -24,400
-Total Amount
- | 97,600
-
-Shopping Site(ID)
- | JDirectItems Fleamarket (126100102149)
-Item Name
- | 3 SR
-Quantity
- | 1
-Item Price
- | 53,800
-Coupon discount
- | -9,684
-Total Amount
- | 44,116
-
-Buyee Service Fee
- | 1,500
-Customs Clearance Fee
- | 800
-Total Amount
- | 2,300
-
-Shipping Expenses
-International Shipping Fee
- | 1,788
-Total Amount
-1,788
-
-Customs Duties and Value-Added Tax
-Customs Duty
- | 21,171
-Total Amount
-21,171
-
-Grand Total Payment Amount
-185,864YEN
-`;
+// Configure PDF.js Worker safely for both local file:// and web servers
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
 
 let currentParsedData = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   lucide.createIcons();
   setupEventListeners();
-  // Parse initial sample manifest automatically
-  parseManifestText(SAMPLE_MANIFEST_TEXT, "W2610049618.pdf");
 });
 
 function setupEventListeners() {
   const dropZone = document.getElementById('dropZone');
   const pdfFileInput = document.getElementById('pdfFileInput');
   const searchInput = document.getElementById('searchInput');
-  const exportCsvBtn = document.getElementById('exportCsvBtn');
-  const exportJsonBtn = document.getElementById('exportJsonBtn');
+  const tabPdf = document.getElementById('tabPdf');
+  const tabPaste = document.getElementById('tabPaste');
+  const pasteZone = document.getElementById('pasteZone');
+  const parseTextBtn = document.getElementById('parseTextBtn');
 
+  // Tab Switching
+  tabPdf.addEventListener('click', () => {
+    dropZone.classList.remove('hidden');
+    pasteZone.classList.add('hidden');
+    tabPdf.className = "text-xs font-semibold text-brand-400 border-b-2 border-brand-500 pb-1";
+    tabPaste.className = "text-xs font-semibold text-slate-400 hover:text-slate-200 pb-1";
+  });
+
+  tabPaste.addEventListener('click', () => {
+    dropZone.classList.add('hidden');
+    pasteZone.classList.remove('hidden');
+    tabPaste.className = "text-xs font-semibold text-brand-400 border-b-2 border-brand-500 pb-1";
+    tabPdf.className = "text-xs font-semibold text-slate-400 hover:text-slate-200 pb-1";
+  });
+
+  // File Selection
   dropZone.addEventListener('click', () => pdfFileInput.click());
 
   dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
-    dropZone.classList.add('border-brand-500', 'bg-slate-900');
+    dropZone.classList.add('border-brand-500');
   });
 
   dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('border-brand-500', 'bg-slate-900');
+    dropZone.classList.remove('border-brand-500');
   });
 
   dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
-    dropZone.classList.remove('border-brand-500', 'bg-slate-900');
+    dropZone.classList.remove('border-brand-500');
     if (e.dataTransfer.files.length > 0) {
       handleFileUpload(e.dataTransfer.files[0]);
     }
@@ -123,91 +64,101 @@ function setupEventListeners() {
     }
   });
 
+  parseTextBtn.addEventListener('click', () => {
+    const text = document.getElementById('rawTextArea').value;
+    if (text.trim()) {
+      parseManifestText(text, "Pasted_Manifest.txt");
+      showStatus("Parsed pasted text successfully!", false);
+    } else {
+      showStatus("Please paste text into the box first.", true);
+    }
+  });
+
   searchInput.addEventListener('input', (e) => {
     renderTable(e.target.value.toLowerCase());
   });
 
-  exportCsvBtn.addEventListener('click', exportToCSV);
-  exportJsonBtn.addEventListener('click', exportToJSON);
+  document.getElementById('exportCsvBtn').addEventListener('click', exportToCSV);
+  document.getElementById('exportJsonBtn').addEventListener('click', exportToJSON);
 }
 
 async function handleFileUpload(file) {
-  showStatus(`Reading file: ${file.name}...`, true);
+  showStatus(`Processing file: ${file.name}...`, false);
 
-  if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-    try {
+  try {
+    if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      let textContent = '';
       
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const tokenized = await page.getTextContent();
-        const pageText = tokenized.items.map(item => item.str).join('\n');
-        textContent += pageText + '\n';
+      // Load PDF document safely
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
+      
+      let fullText = '';
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        
+        // Extract items preserving spacing
+        const pageStrings = textContent.items.map(item => item.str);
+        fullText += pageStrings.join('\n') + '\n';
       }
       
-      parseManifestText(textContent, file.name);
+      parseManifestText(fullText, file.name);
+      showStatus(`Successfully parsed ${file.name} (${pdf.numPages} pages)`, false);
+    } else {
+      // Direct text file
+      const text = await file.text();
+      parseManifestText(text, file.name);
       showStatus(`Successfully parsed ${file.name}`, false);
-    } catch (err) {
-      console.error(err);
-      showStatus(`Error reading PDF file. Attempting raw text parsing...`, false);
     }
-  } else {
-    // Plain text reading
-    const text = await file.text();
-    parseManifestText(text, file.name);
-    showStatus(`Successfully parsed ${file.name}`, false);
+  } catch (err) {
+    console.error("PDF Parsing Error:", err);
+    showStatus(`Failed to parse PDF (${err.message}). Switch to 'Paste Raw Text' tab to paste contents directly.`, true);
   }
 }
 
-function showStatus(msg, isSpinning) {
+function showStatus(msg, isError) {
   const alertEl = document.getElementById('statusAlert');
-  const spinner = document.getElementById('statusSpinner');
   const msgEl = document.getElementById('statusMessage');
 
   alertEl.classList.remove('hidden');
   msgEl.textContent = msg;
-  if (isSpinning) {
-    spinner.classList.remove('hidden');
+
+  if (isError) {
+    alertEl.className = "p-3 rounded-lg text-xs flex items-center justify-between bg-red-950/80 border border-red-800 text-red-200";
   } else {
-    spinner.classList.add('hidden');
-    setTimeout(() => alertEl.classList.add('hidden'), 4000);
+    alertEl.className = "p-3 rounded-lg text-xs flex items-center justify-between bg-emerald-950/80 border border-emerald-800 text-emerald-200";
   }
 }
 
 /**
- * Parser Core Logic for Buyee Manifest Structure
+ * Parser Engine for Buyee Manifest Format
  */
 function parseManifestText(rawText, fileName) {
   const cleanText = rawText.replace(/\r/g, '');
 
-  // Extract Metadata
-  const packageRef = extractRegex(cleanText, /Package Reference No\.\s*\n?\s*([A-Z0-9]+)/i, "W" + Math.floor(Math.random()*1000000000));
-  const delivDate = extractRegex(cleanText, /Date of Delivery\s*:?\s*(\d{4}[-\/]\d{2}[-\/]\d{2})/i, new Date().toISOString().split('T')[0]);
-  const trackingNo = extractRegex(cleanText, /Shipment Tracking No\.\s*\n?\s*([A-Z0-9]+)/i, "N/A");
+  const packageRef = extractRegex(cleanText, /Package Reference No\.\s*\n?\s*([A-Z0-9]+)/i, "N/A");
+  const delivDate = extractRegex(cleanText, /Date of Delivery\s*:?\s*(\d{4}[-\/]\d{2}[-\/]\d{2})/i, "N/A");
 
-  // Extract Overhead Expenses
   const intlShipping = extractNumber(cleanText, /International Shipping Fee\s*\n?\s*\|?\s*([\d,\.]+)/i);
   const customsDuty = extractNumber(cleanText, /Customs Duty\s*\n?\s*\|?\s*\|?\s*([\d,\.]+)/i);
   const buyeeFee = extractNumber(cleanText, /Buyee Service Fee\s*\n?\s*\|?\s*\|?\s*([\d,\.]+)/i);
   const clearanceFee = extractNumber(cleanText, /Customs Clearance Fee\s*\n?\s*\|?\s*\|?\s*([\d,\.]+)/i);
   const otherFees = buyeeFee + clearanceFee;
 
-  // Split document into item blocks by "Shopping Site(ID)"
   const siteParts = cleanText.split(/Shopping Site\(ID\)/i);
   const rawItems = [];
 
   for (let i = 1; i < siteParts.length; i++) {
     const part = siteParts[i].split(/(?:Buyee Service Fee|Invoice Information|Shipping Expenses|Breakdown of Other)/i)[0];
 
-    // Order ID & Site Name
+    // Order ID
     const siteMatch = part.match(/\|\s*([^\(\n]+?)\s*\(([^)]+)\)/);
     let siteName = "Buyee Site";
     let orderId = "N/A";
     if (siteMatch) {
-      siteName = siteMatch.group(1).trim();
-      orderId = siteMatch.group(2).replace(/[\s|]+/g, '').trim();
+      siteName = siteMatch[1].trim();
+      orderId = siteMatch[2].replace(/[\s|]+/g, '').trim();
     }
 
     // Item Name
@@ -220,11 +171,10 @@ function parseManifestText(rawText, fileName) {
       itemName = lines.join(' ');
     }
 
-    // Quantity
+    // Quantities & Prices
     const qtyMatch = part.match(/Quantity\s*\n?[\s|]*(\d+)/i);
     const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
-    // Prices
     const origPrice = extractNumber(part, /Item Price\s*\n?[\s|]*([\d,\.]+)/i);
     const coupon = extractNumber(part, /Coupon discount\s*\n?[\s|]*-?([\d,\.]+)/i);
     let netPrice = origPrice - coupon;
@@ -235,18 +185,11 @@ function parseManifestText(rawText, fileName) {
       if (parsedNet > 0) netPrice = parsedNet;
     }
 
-    rawItems.push({
-      orderId,
-      siteName,
-      itemName,
-      qty,
-      origPrice,
-      coupon,
-      netPrice
-    });
+    if (orderId !== "N/A" || netPrice > 0) {
+      rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });
+    }
   }
 
-  // Calculate Proportional Landed Costs
   const totalNetItemsCost = rawItems.reduce((acc, item) => acc + item.netPrice, 0);
 
   const items = rawItems.map(item => {
@@ -256,13 +199,7 @@ function parseManifestText(rawText, fileName) {
     const splitFees = Math.round(otherFees * ratio);
     const landedCost = item.netPrice + splitShipping + splitDuty + splitFees;
 
-    return {
-      ...item,
-      splitShipping,
-      splitDuty,
-      splitFees,
-      landedCost
-    };
+    return { ...item, splitShipping, splitDuty, splitFees, landedCost };
   });
 
   const grandTotalLanded = items.reduce((acc, item) => acc + item.landedCost, 0);
@@ -271,7 +208,6 @@ function parseManifestText(rawText, fileName) {
     fileName,
     packageRef,
     delivDate,
-    trackingNo,
     intlShipping,
     customsDuty,
     otherFees,
@@ -302,9 +238,6 @@ function parsePriceString(str) {
   return isNaN(num) ? 0 : num;
 }
 
-/**
- * UI Rendering & Metrics
- */
 function updateMetrics() {
   if (!currentParsedData) return;
 
@@ -355,33 +288,15 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/**
- * Data Export Functions
- */
 function exportToCSV() {
   if (!currentParsedData) return;
-
-  const headers = ["Package Ref", "Date", "Order ID", "Site Name", "Item Name", "Qty", "Base Price (JPY)", "Net Price (JPY)", "Split Shipping (JPY)", "Split Duty (JPY)", "Split Fees (JPY)", "Total Landed Cost (JPY)"];
-  
+  const headers = ["Package Ref", "Date", "Order ID", "Site Name", "Item Name", "Qty", "Base Price", "Net Price", "Split Shipping", "Split Duty", "Split Fees", "Total Landed Cost"];
   const rows = currentParsedData.items.map(i => [
-    currentParsedData.packageRef,
-    currentParsedData.delivDate,
-    `"${i.orderId}"`,
-    `"${i.siteName}"`,
-    `"${i.itemName.replace(/"/g, '""')}"`,
-    i.qty,
-    i.origPrice,
-    i.netPrice,
-    i.splitShipping,
-    i.splitDuty,
-    i.splitFees,
-    i.landedCost
+    currentParsedData.packageRef, currentParsedData.delivDate, `"${i.orderId}"`, `"${i.siteName}"`, `"${i.itemName.replace(/"/g, '""')}"`, i.qty, i.origPrice, i.netPrice, i.splitShipping, i.splitDuty, i.splitFees, i.landedCost
   ]);
-
   const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-  const encodedUri = encodeURI(csvContent);
   const link = document.createElement('a');
-  link.setAttribute('href', encodedUri);
+  link.setAttribute('href', encodeURI(csvContent));
   link.setAttribute('download', `Buyee_Landed_Cost_${currentParsedData.packageRef}.csv`);
   document.body.appendChild(link);
   link.click();
@@ -391,10 +306,10 @@ function exportToCSV() {
 function exportToJSON() {
   if (!currentParsedData) return;
   const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentParsedData, null, 2));
-  const downloadAnchor = document.createElement('a');
-  downloadAnchor.setAttribute("href", dataStr);
-  downloadAnchor.setAttribute("download", `Buyee_Landed_Cost_${currentParsedData.packageRef}.json`);
-  document.body.appendChild(downloadAnchor);
-  downloadAnchor.click();
-  downloadAnchor.remove();
+  const link = document.createElement('a');
+  link.setAttribute("href", dataStr);
+  link.setAttribute("download", `Buyee_Landed_Cost_${currentParsedData.packageRef}.json`);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }

@@ -4,39 +4,27 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Buyee Shipping Manifest & Landed Cost Analyzer</title>
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
-  <!-- PDF.js CDN for client-side PDF text extraction -->
+  <!-- PDF.js CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  </script>
   <script>
     tailwind.config = {
       darkMode: 'class',
       theme: {
         extend: {
           colors: {
-            brand: {
-              50: '#f0f9ff',
-              500: '#0284c7',
-              600: '#0369a1',
-              700: '#075985',
-              900: '#0c4a6e',
-            }
+            brand: { 500: '#0284c7', 600: '#0369a1', 700: '#075985' }
           }
         }
       }
     }
   </script>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-brand-500 selection:text-white">
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased">
 
-  <!-- Header / Navigation -->
-  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+  <header class="border-b border-slate-800 bg-slate-900/80 sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
       <div class="flex items-center gap-3">
         <div class="p-2 bg-brand-600/20 text-brand-400 rounded-lg border border-brand-500/30">
           <i data-lucide="package-search" class="w-6 h-6"></i>
@@ -46,113 +34,89 @@
           <p class="text-xs text-slate-400 mt-1">Landed Cost & Tariff Splitter</p>
         </div>
       </div>
-      <div class="flex items-center gap-3">
-        <button id="exportCsvBtn" class="flex items-center gap-2 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700 transition">
+      <div class="flex items-center gap-2">
+        <button id="exportCsvBtn" class="flex items-center gap-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700">
           <i data-lucide="download" class="w-4 h-4"></i> Export CSV
         </button>
-        <button id="exportJsonBtn" class="flex items-center gap-2 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700 transition">
+        <button id="exportJsonBtn" class="flex items-center gap-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700">
           <i data-lucide="file-json" class="w-4 h-4"></i> Export JSON
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Main Container -->
-  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+  <main class="max-w-7xl mx-auto px-4 py-8 space-y-8">
 
-    <!-- Upload Area & Drag-and-Drop Zone -->
-    <section class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl relative">
-      <div id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-brand-500 transition-colors rounded-xl p-8 text-center cursor-pointer bg-slate-950/50 group">
+    <!-- Upload & Input Options -->
+    <section class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+      <div class="flex border-b border-slate-800 pb-3 gap-4">
+        <button id="tabPdf" class="text-xs font-semibold text-brand-400 border-b-2 border-brand-500 pb-1">Upload PDF File</button>
+        <button id="tabPaste" class="text-xs font-semibold text-slate-400 hover:text-slate-200 pb-1">Paste Raw Text</button>
+      </div>
+
+      <!-- PDF Dropzone -->
+      <div id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-brand-500 rounded-xl p-8 text-center cursor-pointer bg-slate-950/50">
         <input type="file" id="pdfFileInput" accept="application/pdf,text/plain" class="hidden" />
-        <div class="flex flex-col items-center justify-center gap-3">
-          <div class="p-4 rounded-full bg-slate-800/80 text-brand-400 group-hover:scale-110 transition-transform">
-            <i data-lucide="upload-cloud" class="w-8 h-8"></i>
-          </div>
-          <div>
-            <p class="font-semibold text-slate-200 text-base">Drop your Buyee Shipping Manifest PDF here</p>
-            <p class="text-xs text-slate-400 mt-1">Parses Package Reference, Tracking, Items, Shipping, Customs Duties & Allocates Landed Costs</p>
-          </div>
-          <button type="button" class="mt-2 text-xs font-medium bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-lg transition shadow-md">
-            Browse File
-          </button>
+        <div class="flex flex-col items-center gap-2">
+          <i data-lucide="upload-cloud" class="w-8 h-8 text-brand-400"></i>
+          <p class="font-semibold text-slate-200 text-sm">Drop Buyee Shipping Manifest PDF or Click to Select</p>
+          <p class="text-xs text-slate-500">Supports PDF files generated by Buyee / Tenso</p>
         </div>
       </div>
-      <!-- Processing Status Indicator -->
-      <div id="statusAlert" class="hidden mt-4 p-3 rounded-lg bg-slate-800 text-xs flex items-center gap-2 text-slate-300">
-        <i data-lucide="loader-2" class="w-4 h-4 animate-spin text-brand-400" id="statusSpinner"></i>
-        <span id="statusMessage">Processing PDF document...</span>
+
+      <!-- Paste Text Area (Hidden by default) -->
+      <div id="pasteZone" class="hidden space-y-3">
+        <textarea id="rawTextArea" rows="6" placeholder="Paste full text of manifest here if PDF uploading is blocked locally..." class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-slate-300 focus:outline-none focus:border-brand-500"></textarea>
+        <button id="parseTextBtn" class="text-xs font-medium bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-lg">Parse Text Data</button>
+      </div>
+
+      <!-- Status & Error Output -->
+      <div id="statusAlert" class="hidden p-3 rounded-lg text-xs flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i data-lucide="info" class="w-4 h-4" id="statusIcon"></i>
+          <span id="statusMessage">Status message</span>
+        </div>
       </div>
     </section>
 
-    <!-- Summary Metrics Grid -->
+    <!-- Summary Metrics -->
     <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <div class="flex items-center justify-between text-slate-400 text-xs">
-          <span>Items Extracted</span>
-          <i data-lucide="layers" class="w-4 h-4 text-brand-400"></i>
-        </div>
+        <span class="text-slate-400 text-xs">Items Extracted</span>
         <p id="metricTotalItems" class="text-2xl font-bold text-slate-100 mt-2">0</p>
-        <p id="metricManifestRef" class="text-[11px] text-slate-500 mt-1 font-mono">Manifest: N/A</p>
+        <p id="metricManifestRef" class="text-[11px] text-slate-500 mt-1 font-mono">Ref: N/A</p>
       </div>
-
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <div class="flex items-center justify-between text-slate-400 text-xs">
-          <span>Net Item Cost</span>
-          <i data-lucide="shopping-bag" class="w-4 h-4 text-emerald-400"></i>
-        </div>
+        <span class="text-slate-400 text-xs">Net Item Cost</span>
         <p id="metricNetCost" class="text-2xl font-bold text-emerald-400 mt-2">¥0</p>
-        <p class="text-[11px] text-slate-500 mt-1">Item Purchase Subtotal</p>
       </div>
-
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <div class="flex items-center justify-between text-slate-400 text-xs">
-          <span>Intl Shipping</span>
-          <i data-lucide="plane" class="w-4 h-4 text-blue-400"></i>
-        </div>
+        <span class="text-slate-400 text-xs">Intl Shipping</span>
         <p id="metricShipping" class="text-2xl font-bold text-blue-400 mt-2">¥0</p>
-        <p class="text-[11px] text-slate-500 mt-1">Split proportionally</p>
       </div>
-
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <div class="flex items-center justify-between text-slate-400 text-xs">
-          <span>Tariffs & Duty</span>
-          <i data-lucide="landmark" class="w-4 h-4 text-amber-400"></i>
-        </div>
+        <span class="text-slate-400 text-xs">Tariffs & Duty</span>
         <p id="metricDuty" class="text-2xl font-bold text-amber-400 mt-2">¥0</p>
-        <p class="text-[11px] text-slate-500 mt-1">Customs Duty tax</p>
       </div>
-
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <div class="flex items-center justify-between text-slate-400 text-xs">
-          <span>Total Landed Cost</span>
-          <i data-lucide="calculator" class="w-4 h-4 text-purple-400"></i>
-        </div>
+        <span class="text-slate-400 text-xs">Total Landed Cost</span>
         <p id="metricGrandTotal" class="text-2xl font-bold text-purple-400 mt-2">¥0</p>
-        <p class="text-[11px] text-slate-500 mt-1">Items + Shipping + Duty + Fees</p>
       </div>
     </section>
 
-    <!-- Data Controls & Table -->
+    <!-- Items Table -->
     <section class="bg-slate-900 border border-slate-800 rounded-xl shadow-xl overflow-hidden">
-      <!-- Toolbar -->
       <div class="p-4 border-b border-slate-800 flex flex-col sm:flex-row gap-4 items-center justify-between">
-        <div class="relative w-full sm:w-80">
-          <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"></i>
-          <input type="text" id="searchInput" placeholder="Search order ID, item name, site..." class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500" />
-        </div>
-        <div class="flex items-center gap-2 text-xs text-slate-400">
-          <i data-lucide="info" class="w-4 h-4 text-brand-400"></i>
-          <span>Shipping, duties & fees are split proportionally based on item net price.</span>
-        </div>
+        <input type="text" id="searchInput" placeholder="Search order ID, item name, site..." class="w-full sm:w-80 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-brand-500" />
+        <span class="text-xs text-slate-400">Shipping, duties & fees split proportionally by net price.</span>
       </div>
 
-      <!-- Table -->
       <div class="overflow-x-auto">
         <table class="w-full text-left border-collapse text-xs">
           <thead>
             <tr class="bg-slate-950/70 border-b border-slate-800 text-slate-400 font-medium">
               <th class="p-3">Order ID</th>
-              <th class="p-3">Shopping Site</th>
+              <th class="p-3">Site</th>
               <th class="p-3">Item Name</th>
               <th class="p-3 text-right">Base Price</th>
               <th class="p-3 text-right">Net Price</th>
@@ -162,15 +126,12 @@
               <th class="p-3 text-right text-purple-300 font-bold">Landed Cost</th>
             </tr>
           </thead>
-          <tbody id="manifestTableBody" class="divide-y divide-slate-800/60 text-slate-300 font-mono">
-            <!-- Dynamic Rows rendered via JS -->
-          </tbody>
+          <tbody id="manifestTableBody" class="divide-y divide-slate-800/60 text-slate-300 font-mono"></tbody>
         </table>
       </div>
     </section>
   </main>
 
-  <!-- JS Implementation -->
   <script src="app.js"></script>
 </body>
 </html>
