@@ -242,7 +242,7 @@ window.processOrderPdfFile = async function(file) {
       alert(`Successfully imported and translated ${parsed.length} order items!`);
     } else {
       updateStatus("No order records found in PDF.", true);
-      alert("PDF read successfully, but no order items were matched in this file.");
+      alert("PDF read successfully, but no order records were matched in this file.");
     }
   } catch (err) {
     updateStatus("Order PDF Error: " + err.message, true);
@@ -273,7 +273,6 @@ window.processShippingPdfFile = async function(file) {
 function parseBuyeeShippingPdf(text, project) {
   let intlShippingJPY = 0;
 
-  // Extract ONLY International Shipping Fee
   const shipMatch = text.match(/International\s*Shipping\s*Fee\s*\|?\s*([\d,]+)/i);
   if (shipMatch) {
     intlShippingJPY = parseFloat(shipMatch[1].replace(/,/g, '')) || 0;
@@ -297,30 +296,23 @@ function parseBuyeeShippingPdf(text, project) {
     };
   }
 
-  // Extract Mercari/Fleamarket IDs & Model Codes from PDF
   const siteIds = (text.match(/(M\d{10,12}|\b126\d{9,11}\b|\bW26\d{8,10}\b)/gi) || []).map(x => x.toUpperCase());
   const itemCodes = (text.match(/([A-Z0-9]{3,8}-[A-Z0-9-]+)/gi) || []).map(x => x.toUpperCase()).filter(c => !c.includes('2026') && !c.includes('VALUE'));
 
-  // Match items in project list
   let matchedItems = items.filter(item => {
     const orderId = (item.orderId || '').toUpperCase();
     const title = (item.itemTitle || '').toUpperCase();
 
-    // Direct match on Site ID or Order ID
     if (orderId && siteIds.some(id => orderId.includes(id) || id.includes(orderId))) return true;
-
-    // Model code match (e.g., LOB-005, BLC-4-027)
     if (itemCodes.some(code => title.includes(code))) return true;
 
     return false;
   });
 
-  // Fallback: If specific ID/code matching produced no hits, allocate across ALL items in project
   if (matchedItems.length === 0) {
     matchedItems = items;
   }
 
-  // Calculate proportional share strictly for International Shipping Fee by JPY item price
   const totalMatchedJPY = matchedItems.reduce((sum, i) => sum + (i.priceJPY || 0), 0);
 
   matchedItems.forEach(item => {
@@ -336,52 +328,109 @@ function parseBuyeeShippingPdf(text, project) {
   };
 }
 
+// Flexible, Decoupled Order Receipt Stream Parser
 function parseBuyeeTextStream(text) {
   const items = [];
   const currentTariff = getCurrentProject().tariffRate || 12.566;
-  const cleanText = text.replace(/Order\s*date\s*:?/gi, 'Order date ').replace(/\s+/g, ' ');
-  const orderHeaderRegex = /([A-Z0-9]{8,20})\s*Order\s*date\s*(\d{1,2}\s+[A-Za-z]{3}\s+20\d{2})/gi;
-  const matches = [...cleanText.matchAll(orderHeaderRegex)];
+  const cleanText = text.replace(/\s+/g, ' ');
 
-  if (matches.length === 0) return items;
+  // Locate slice anchors for every item or order entry
+  const idMatches = listAllMatches(/(?:Order\s*(?:ID|number|No\.?)|Site\(ID\)|Shopping\s*Site\(ID\))\s*:?\s*([A-Z0-9]{8,20})|(?:\b|\bOrder\s*)([MYRJ]\d{9,13}|\b126\d{9,11}\b)/gi, cleanText);
+  const dateMatches = listAllMatches(/(?:Order\s*date|Date\s*of\s*Order)\s*:?\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+20\d{2})/gi, cleanText);
 
-  matches.forEach((match, index) => {
-    const orderId = match[1].trim();
-    const orderDate = match[2].trim();
-    const startIndex = match.index;
-    const endIndex = (index < matches.length - 1) ? matches[index + 1].index : cleanText.length;
-    const block = cleanText.slice(startIndex, endIndex);
+  let sliceIndices = [];
+  idMatches.forEach(m => sliceIndices.push(m.index));
+  dateMatches.forEach(m => sliceIndices.push(m.index));
 
-    if (block.includes('out of stock') || block.includes('Order was cancelled')) return;
+  sliceIndices = [...new Set(sliceIndices)].sort((a, b) => a - b);
 
+  // Merge slice points that are too close (< 40 chars)
+  const filteredIndices = [];
+  sliceIndices.forEach(idx => {
+    if (filteredIndices.length === 0 || (idx - filteredIndices[filteredIndices.length - 1]) > 40) {
+      filteredIndices.push(idx);
+    }
+  });
+
+  if (filteredIndices.length === 0) {
+    filteredIndices.push(0);
+  }
+
+  const blocks = [];
+  for (let i = 0; i < filteredIndices.length; i++) {
+    const start = filteredIndices[i];
+    const end = (i < filteredIndices.length - 1) ? filteredIndices[i + 1] : cleanText.length;
+    const block = cleanText.slice(start, end).trim();
+    if (block.length > 10) {
+      blocks.push(block);
+    }
+  }
+
+  blocks.forEach((block, index) => {
+    if (block.toLowerCase().includes('out of stock') || block.toLowerCase().includes('order was cancelled')) {
+      return;
+    }
+
+    // Extract Order Date
+    let orderDate = "N/A";
+    const dateMatch = block.match(/(\d{1,2}\s+[A-Za-z]{3,9}\s+20\d{2})/i);
+    if (dateMatch) {
+      orderDate = dateMatch[1].trim();
+    }
+
+    // Extract Order ID
+    let orderId = "N/A";
+    const idMatch = block.match(/(?:Order\s*(?:ID|number|No\.?)|Site\(ID\)|Shopping\s*Site\(ID\))\s*:?\s*([A-Z0-9]{8,20})/i) || block.match(/\b([MYRJ]\d{9,13}|\b126\d{9,11}\b)\b/i);
+    if (idMatch) {
+      orderId = (idMatch[1] || idMatch[0]).trim();
+    }
+
+    // Extract Seller
     let seller = "Buyee Seller";
-    const sellerMatch = block.match(/(?:Shop Name|Seller)\s*([^\n\r]+?)(?=\s*(?:Total Amount|After your|Details|Purchase|Transaction|Quantity|Order date|$))/i);
-    if (sellerMatch && sellerMatch[1]) seller = sellerMatch[1].replace(/[-–—]\s*$/, '').trim();
+    const sellerMatch = block.match(/(?:Shop Name|Seller|Store Name)\s*:?\s*([^\r\n]+?)(?=\s*(?:Total Amount|After your|Details|Purchase|Transaction|Quantity|Order date|Requested Item Price|Item Price|$))/i);
+    if (sellerMatch && sellerMatch[1]) {
+      seller = sellerMatch[1].replace(/[-–—]\s*$/, '').trim();
+    }
 
+    // Extract JPY Price
     let priceJPY = 0;
-    const jpyMatch = block.match(/(?:Requested Item Price|Item Price)\s*:?\s*([\d,]+)\s*YEN/i) || block.match(/Total Amount\s*:?\s*([\d,]+)\s*YEN/i);
-    if (jpyMatch) priceJPY = parseFloat(jpyMatch[1].replace(/,/g, '')) || 0;
+    const jpyMatch = block.match(/(?:Requested Item Price|Item Price)\s*:?\s*([\d,]+)\s*YEN/i) || block.match(/Total Amount\s*:?\s*([\d,]+)\s*YEN/i) || block.match(/([\d,]+)\s*YEN/i);
+    if (jpyMatch) {
+      priceJPY = parseFloat(jpyMatch[1].replace(/,/g, '')) || 0;
+    }
 
+    // Extract Printed USD
     let printedUSD = null;
-    const usdMatches = [...block.matchAll(/\(US\$\s*([\d,]+\.\d{2})\)/gi)];
-    if (usdMatches.length > 0) printedUSD = parseFloat(usdMatches[usdMatches.length - 1][1].replace(/,/g, ''));
+    const usdMatches = listAllMatches(/\(US\$\s*([\d,]+\.\d{2})\)/gi, block);
+    if (usdMatches.length > 0) {
+      printedUSD = parseFloat(usdMatches[usdMatches.length - 1][1].replace(/,/g, ''));
+    }
 
+    // Extract Quantity
     let qty = 1;
-    const qtyMatch = block.match(/Quantity\s*(\d+|[lI])\s*item\(s\)/i);
+    const qtyMatch = block.match/Quantity\s*:?\s*(\d+|[lI])\s*item\(s\)?/i || block.match/Quantity\s*:?\s*(\d+)/i;
     if (qtyMatch) {
       const rawQty = qtyMatch[1];
       qty = (rawQty === 'l' || rawQty === 'I') ? 1 : (parseInt(rawQty, 10) || 1);
     }
 
+    // Extract Item Title
     let rawTitle = "Proxy Purchase Item";
-    const qtyIdx = block.search(/Quantity\s*(\d+|[lI])\s*item\(s\)/i);
+    const qtyIdx = block.search(/Quantity\s*:?\s*(\d+|[lI])\s*item\(s\)?/i);
     if (qtyIdx > 0) {
       let snippet = block.slice(Math.max(0, qtyIdx - 160), qtyIdx).trim();
-      snippet = snippet.replace(/.*(?:Purchase request items|Transaction Delivery|Arrived at Warehouse|Shipped|Order Completed|Order Received|Details)\s*/gi, '').trim();
-      if (snippet.length > 0) rawTitle = snippet.slice(-120).replace(/^[\s•:-]+/, '').trim();
+      snippet = snippet.replace(/.*?(?:Purchase request items|Transaction Delivery|Arrived at Warehouse|Shipped|Order Completed|Order Received|Details|Shop Name|Seller)[^\n]*/gi, '').trim();
+      if (snippet.length > 0) {
+        rawTitle = snippet.slice(-120).replace(/^[\s•:-]+/, '').trim();
+      }
+    } else {
+      const itemMatch = block.match(/(?:Purchase request items|Item Name|Product Name)\s*:?\s*([^\r\n]+?)(?=\s*(?:Quantity|Item Price|Requested Item Price|Total Amount|$))/i);
+      if (itemMatch && itemMatch[1]) {
+        rawTitle = itemMatch[1].trim();
+      }
     }
 
-    if (priceJPY > 0) {
+    if (priceJPY > 0 || orderId !== "N/A") {
       items.push({
         id: String(Date.now() + index + Math.random()),
         orderDate: orderDate,
@@ -399,6 +448,15 @@ function parseBuyeeTextStream(text) {
   });
 
   return items;
+}
+
+function listAllMatches(regex, text) {
+  const matches = [];
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    matches.push(match);
+  }
+  return matches;
 }
 
 window.applyGlobalChangesToAllRows = function() {
@@ -477,7 +535,7 @@ function getFxRate(item) {
   if (item.printedUSD && item.priceJPY > 0) {
     return item.printedUSD / item.priceJPY;
   }
-  if (item.orderDate) {
+  if (item.orderDate && item.orderDate !== 'N/A') {
     const parts = item.orderDate.split(' ');
     if (parts.length >= 3) {
       const monthMap = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06', Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
