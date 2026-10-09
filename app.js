@@ -33,7 +33,6 @@ document.addEventListener('DOMContentLoaded', () => {
   renderProjectDropdown();
   loadProjectUI();
   setupGlobalInputs();
-  setupDropZone();
 });
 
 function safeCreateIcons() {
@@ -47,8 +46,8 @@ function updateStatus(msg, isError = false) {
   if (statusEl) {
     statusEl.innerText = msg;
     statusEl.className = isError 
-      ? "text-[11px] font-mono text-rose-300 mt-3 bg-rose-950/80 px-3 py-1 rounded border border-rose-800/50"
-      : "text-[11px] font-mono text-indigo-300 mt-3 bg-slate-900/80 px-3 py-1 rounded border border-indigo-900/50";
+      ? "text-[11px] font-mono text-rose-300 mt-4 bg-rose-950/80 px-3 py-1.5 rounded border border-rose-800/50 truncate text-center"
+      : "text-[11px] font-mono text-indigo-300 mt-4 bg-slate-900/80 px-3 py-1.5 rounded border border-indigo-900/50 truncate text-center";
   }
 }
 
@@ -177,80 +176,97 @@ window.translateAllExistingItems = async function() {
   alert(`Finished translating titles!`);
 };
 
-window.handleFileSelect = async function(event) {
+// -------------------------------------------------------------
+// SEPARATE PDF FILE SELECT HANDLERS FOR ORDERS & SHIPPING
+// -------------------------------------------------------------
+
+window.handleOrderFileSelect = async function(event) {
   try {
     const file = event.target.files && event.target.files[0];
     if (!file) return;
-    updateStatus(`Selected: ${file.name}. Reading PDF...`);
-    await window.processPdfFile(file);
+    updateStatus(`Selected Order PDF: ${file.name}...`);
+    await window.processOrderPdfFile(file);
     event.target.value = '';
   } catch(err) {
-    updateStatus("File selection error: " + err.message, true);
+    updateStatus("Order PDF error: " + err.message, true);
   }
 };
 
-window.processPdfFile = async function(file) {
-  if (!file) return;
-
+window.handleShippingFileSelect = async function(event) {
   try {
-    if (typeof pdfjsLib === 'undefined') {
-      updateStatus("Error: PDF.js library failed to load.", true);
-      alert("PDF.js engine is not loaded on this page.");
-      return;
-    }
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    updateStatus(`Selected Shipping PDF: ${file.name}...`);
+    await window.processShippingPdfFile(file);
+    event.target.value = '';
+  } catch(err) {
+    updateStatus("Shipping PDF error: " + err.message, true);
+  }
+};
 
-    if (pdfjsLib.GlobalWorkerOptions) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    }
+async function extractPdfText(file) {
+  if (typeof pdfjsLib === 'undefined') {
+    throw new Error("PDF.js library failed to load.");
+  }
+  if (pdfjsLib.GlobalWorkerOptions) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
 
-    updateStatus("Opening PDF file...");
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
+  updateStatus("Opening PDF file...");
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  const pdf = await loadingTask.promise;
+  
+  updateStatus(`Extracting ${pdf.numPages} PDF page(s)...`);
+  let fullText = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    fullText += " " + textContent.items.map(item => item.str).join(' ');
+  }
+  return fullText;
+}
+
+window.processOrderPdfFile = async function(file) {
+  try {
+    const fullText = await extractPdfText(file);
+    updateStatus("Parsing Buyee order receipts...");
+    const parsed = parseBuyeeTextStream(fullText);
     
-    updateStatus(`PDF loaded (${pdf.numPages} pages). Extracting text...`);
-    let fullText = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-      updateStatus(`Extracting page ${i} of ${pdf.numPages}...`);
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      fullText += " " + textContent.items.map(item => item.str).join(' ');
-    }
+    if (parsed.length > 0) {
+      await translateItemList(parsed);
 
-    // Strictly detect Shipping Receipt vs Order Receipt
-    const isShippingPdf = /Package\s*Reference\s*No|International\s*Shipping\s*Fee/i.test(fullText);
-
-    if (isShippingPdf) {
-      updateStatus("Processing Shipping Package PDF...");
-      const result = parseBuyeeShippingPdf(fullText, getCurrentProject());
-      
-      if (result.success) {
-        updateCalculations();
-        updateStatus(`Allocated ${result.shippingJPY} JPY shipping across ${result.matchedCount} items!`);
-        alert(`Success! Allocated ${result.shippingJPY} JPY International Shipping Fee across ${result.matchedCount} items.`);
-      } else {
-        updateStatus(result.message, true);
-        alert(result.message);
-      }
+      getCurrentProject().items = [...parsed, ...getCurrentProject().items];
+      updateCalculations();
+      updateStatus(`Success: Imported ${parsed.length} order items!`);
+      alert(`Successfully imported and translated ${parsed.length} order items!`);
     } else {
-      updateStatus("Parsing Buyee order layout...");
-      const parsed = parseBuyeeTextStream(fullText);
-      
-      if (parsed.length > 0) {
-        await translateItemList(parsed);
-
-        getCurrentProject().items = [...parsed, ...getCurrentProject().items];
-        updateCalculations();
-        updateStatus(`Success: Imported & translated ${parsed.length} orders!`);
-        alert(`Successfully imported and translated ${parsed.length} orders!`);
-      } else {
-        updateStatus("No order records found in PDF format.", true);
-        alert("PDF read successfully, but no orders matched the expected Buyee receipt format.");
-      }
+      updateStatus("No order records found in PDF.", true);
+      alert("PDF read successfully, but no order items were matched in this file.");
     }
   } catch (err) {
-    updateStatus("PDF Error: " + err.message, true);
-    alert("Error reading PDF: " + err.message);
+    updateStatus("Order PDF Error: " + err.message, true);
+    alert("Error processing Order PDF: " + err.message);
+  }
+};
+
+window.processShippingPdfFile = async function(file) {
+  try {
+    const fullText = await extractPdfText(file);
+    updateStatus("Processing Package Shipping Manifest...");
+    const result = parseBuyeeShippingPdf(fullText, getCurrentProject());
+    
+    if (result.success) {
+      updateCalculations();
+      updateStatus(`Allocated ${result.shippingJPY} JPY shipping across ${result.matchedCount} items!`);
+      alert(`Success! Allocated ${result.shippingJPY} JPY International Shipping Fee across ${result.matchedCount} items.`);
+    } else {
+      updateStatus(result.message, true);
+      alert(result.message);
+    }
+  } catch (err) {
+    updateStatus("Shipping PDF Error: " + err.message, true);
+    alert("Error processing Shipping Manifest: " + err.message);
   }
 };
 
@@ -269,7 +285,7 @@ function parseBuyeeShippingPdf(text, project) {
   if (intlShippingJPY <= 0) {
     return {
       success: false,
-      message: "Could not locate 'International Shipping Fee' in the PDF."
+      message: "Could not locate 'International Shipping Fee' in this Shipping Manifest PDF."
     };
   }
 
@@ -406,30 +422,6 @@ window.applyGlobalChangesToAllRows = function() {
 function setupGlobalInputs() {
   const tariffInput = document.getElementById('globalTariffInput');
   if (tariffInput) tariffInput.addEventListener('input', updateCalculations);
-}
-
-function setupDropZone() {
-  const dropZone = document.getElementById('dropZone');
-  if (!dropZone) return;
-
-  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-    dropZone.addEventListener(eventName, (e) => { e.preventDefault(); e.stopPropagation(); }, false);
-  });
-
-  ['dragenter', 'dragover'].forEach(eventName => {
-    dropZone.addEventListener(eventName, () => dropZone.classList.add('border-indigo-500', 'bg-slate-700/60'), false);
-  });
-
-  ['dragleave', 'drop'].forEach(eventName => {
-    dropZone.addEventListener(eventName, () => dropZone.classList.remove('border-indigo-500', 'bg-slate-700/60'), false);
-  });
-
-  dropZone.addEventListener('drop', (e) => {
-    const dt = e.dataTransfer;
-    if (dt && dt.files && dt.files.length > 0) {
-      window.processPdfFile(dt.files[0]);
-    }
-  }, false);
 }
 
 function renderProjectDropdown() {
