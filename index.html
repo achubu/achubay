@@ -8,7 +8,7 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <!-- PDF.js CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <!-- Tesseract.js OCR Engine for Scanned PDF Support -->
+  <!-- Tesseract.js OCR Engine -->
   <script src="https://unpkg.com/tesseract.js@v5.0.5/dist/tesseract.min.js"></script>
   <script>
     tailwind.config = {
@@ -49,30 +49,26 @@
 
   <main class="max-w-7xl mx-auto px-4 py-8 space-y-8">
 
-    <!-- Upload & Input Options -->
     <section class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
       <div class="flex border-b border-slate-800 pb-3 gap-4">
         <button id="tabPdf" class="text-xs font-semibold text-brand-400 border-b-2 border-brand-500 pb-1">Upload PDF File</button>
         <button id="tabPaste" class="text-xs font-semibold text-slate-400 hover:text-slate-200 pb-1">Paste / View Raw Text</button>
       </div>
 
-      <!-- PDF Dropzone -->
       <div id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-brand-500 rounded-xl p-8 text-center cursor-pointer bg-slate-950/50">
         <input type="file" id="pdfFileInput" accept="application/pdf,text/plain" class="hidden" />
         <div class="flex flex-col items-center gap-2">
           <i data-lucide="upload-cloud" class="w-8 h-8 text-brand-400"></i>
           <p class="font-semibold text-slate-200 text-sm">Drop Buyee Shipping Manifest PDF or Click to Browse</p>
-          <p class="text-xs text-slate-500">Supports Vector PDFs & Scanned PDF Images (via Auto-OCR)</p>
+          <p class="text-xs text-slate-500">Supports Native PDFs & Scanned PDF Images (via Japanese/English OCR)</p>
         </div>
       </div>
 
-      <!-- Paste Text Area -->
       <div id="pasteZone" class="hidden space-y-3">
-        <textarea id="rawTextArea" rows="6" placeholder="Paste raw text here or view text/OCR extracted from PDF..." class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-slate-300 focus:outline-none focus:border-brand-500"></textarea>
+        <textarea id="rawTextArea" rows="6" placeholder="Paste raw text here or view text extracted from PDF..." class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-slate-300 focus:outline-none focus:border-brand-500"></textarea>
         <button id="parseTextBtn" class="text-xs font-medium bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-lg">Parse Text Data</button>
       </div>
 
-      <!-- Status Alert -->
       <div id="statusAlert" class="hidden p-3 rounded-lg text-xs flex items-center justify-between">
         <div class="flex items-center gap-2">
           <i data-lucide="info" class="w-4 h-4" id="statusIcon"></i>
@@ -81,7 +77,6 @@
       </div>
     </section>
 
-    <!-- Summary Metrics -->
     <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
         <span class="text-slate-400 text-xs">Items Extracted</span>
@@ -106,7 +101,6 @@
       </div>
     </section>
 
-    <!-- Items Table -->
     <section class="bg-slate-900 border border-slate-800 rounded-xl shadow-xl overflow-hidden">
       <div class="p-4 border-b border-slate-800 flex flex-col sm:flex-row gap-4 items-center justify-between">
         <input type="text" id="searchInput" placeholder="Search order ID, item name, site..." class="w-full sm:w-80 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-brand-500" />

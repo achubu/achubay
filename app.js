@@ -1,6 +1,6 @@
 /**
  * Buyee Shipping Manifest & Landed Cost Parser Engine
- * Multi-Strategy OCR & Noise Filtered Version
+ * Dual Japanese/English OCR Support
  */
 
 const PDFJS_VERSION = '3.11.174';
@@ -137,9 +137,8 @@ async function handleFileUpload(file) {
         fullText += pageLines.join('\n') + '\n';
       }
 
-      // If text layer is missing or sparse (< 30 chars), perform document OCR
       if (!fullText.trim() || fullText.trim().length < 30) {
-        showStatus(`Scanned image PDF detected in ${file.name}. Running document OCR...`, false);
+        showStatus(`Scanned image PDF detected. Running Japanese + English OCR...`, false);
         fullText = await performOcrOnPdf(pdf);
       }
 
@@ -158,7 +157,7 @@ async function handleFileUpload(file) {
 }
 
 /**
- * Clean OCR Engine with Document Segmentation (PSM 6)
+ * Japanese + English OCR Engine
  */
 async function performOcrOnPdf(pdf) {
   let ocrText = '';
@@ -167,7 +166,8 @@ async function performOcrOnPdf(pdf) {
     return "";
   }
 
-  const worker = await Tesseract.createWorker('eng');
+  // Load both Japanese and English OCR models
+  const worker = await Tesseract.createWorker('eng+jpn');
 
   await worker.setParameters({
     tessedit_pageseg_mode: '6',
@@ -175,9 +175,9 @@ async function performOcrOnPdf(pdf) {
   });
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    showStatus(`Scanning page ${pageNum} of ${pdf.numPages} with document OCR...`, false);
+    showStatus(`Scanning page ${pageNum} of ${pdf.numPages} with Japanese/English OCR...`, false);
     const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 2.0 });
+    const viewport = page.getViewport({ scale: 2.5 });
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -206,13 +206,13 @@ function showStatus(msg, isError) {
 }
 
 /**
- * Multi-Strategy Buyee Manifest Parser
+ * Buyee Manifest Parser
  */
 function parseManifestText(rawText, fileName) {
-  // Step 1: Filter out border noise lines composed purely of =, -, _, —, |, +
+  // Strip lines that consist only of noise/line artifacts
   const cleanLines = rawText.split('\n').filter(line => {
-    const s = line.strip ? line.strip() : line.trim();
-    return !/^[=\-_—\+\*\|I\s\.\,\:\;\/]+$/.test(s);
+    const s = line.trim();
+    return !/^[=\-_—\+\*\|I\s\.\,\:\;\/]+$/.test(s) && s.length > 0;
   });
   const cleanText = cleanLines.join('\n').replace(/\r/g, '');
 
@@ -227,7 +227,7 @@ function parseManifestText(rawText, fileName) {
 
   let rawItems = [];
 
-  // Strategy 1: Header-based splitting on 'Shopping Site' (and OCR typo variations)
+  // Strategy 1: Flexible header split
   const siteParts = cleanText.split(/(?:Shopping|Shoppng|Snopping|Sh0pp1ng|Shop[a-z0-9]*)\s*Site/i);
 
   if (siteParts.length > 1) {
@@ -239,53 +239,7 @@ function parseManifestText(rawText, fileName) {
 
       let siteName = "Buyee Site";
       if (orderId !== "N/A") {
-        const siteMatch = block.match(new RegExp('([A-Za-z0-9_ \\.-]+?)\\s*\\(\\s*' + orderId, 'i'));
-        if (siteMatch) {
-          siteName = siteMatch[1].replace(/\n/g, ' ').replace(/^[|\s]+/, '').trim();
-        }
-      }
-
-      const nameMatch = block.match(/Item[\s|]*Name[\s|]*\n?([\s\S]+?)(?=\n?[\s|]*Quantity|\n?[\s|]*Item[\s|]*Price)/i);
-      let itemName = "Item";
-      if (nameMatch) {
-        const lines = nameMatch[1].split('\n')
-          .map(l => l.replace(/^[|\s]+/, '').trim())
-          .filter(l => l && l !== '|');
-        itemName = lines.join(' ');
-      }
-
-      const qtyMatch = block.match(/Quantity[\s\S]*?(\d+)/i);
-      const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
-
-      const origPrice = extractPriceNumber(block, /Item[\s|]*Price[\s\S]*?([\d,\.]{3,})/i);
-      const coupon = extractPriceNumber(block, /Coupon[\s|]*discount[\s\S]*?(-?[\d,\.]{3,})/i);
-      let netPrice = extractPriceNumber(block, /Total[\s|]*Amount[\s\S]*?([\d,\.]{3,})/i);
-
-      if (netPrice === 0 && origPrice > 0) {
-        netPrice = origPrice - coupon;
-      }
-
-      if (orderId !== "N/A" || netPrice > 0) {
-        rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });
-      }
-    }
-  }
-
-  // Strategy 2 (Fallback): Direct Order ID Parentheses Anchor Extraction
-  if (rawItems.length === 0) {
-    const itemSection = cleanText.split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Customs\s*Duties|Breakdown\s*of\s*Other)/i)[0];
-    const orderMatches = [...itemSection.matchAll(/\(\s*([A-Za-z0-9_-]{8,20})\s*\)/g)];
-
-    for (let idx = 0; idx < orderMatches.length; idx++) {
-      const match = orderMatches[idx];
-      const orderId = match[1].trim();
-
-      const startIdx = Math.max(0, match.index - 120);
-      const endIdx = (idx + 1 < orderMatches.length) ? orderMatches[idx + 1].index - 120 : itemSection.length;
-      const chunk = itemSection.substring(startIdx, endIdx);
-
-      let siteName = "Buyee Site";
-      const siteMatch = chunk.match(new RegExp('([A-Za-z0-9_ \\.-]+?)\\s*\\(\\s*' + orderId, 'i'));
+        const siteMatch = block.match(new RegExp('([^\n\\(\\)]+?)\\s*\\(\\s*' + orderId, 'i'));         if (siteMatch) {           siteName = siteMatch[1].replace(/\n/g, ' ').replace(/^[\vert{}\s]+/, '').trim();         }       }        const nameMatch = block.match(/Item[\s\vert{}]*Name[\s\vert{}]*\n?([\s\S]+?)(?=\n?[\s\vert{}]*Quantity\vert{}\n?[\s\vert{}]*Item[\s\vert{}]*Price)/i);       let itemName = "Item";       if (nameMatch) {         const lines = nameMatch[1].split('\n')           .map(l => l.replace(/^[\vert{}\s]+/, '').trim())           .filter(l => l && l !== '\vert{}');         itemName = lines.join(' ');       }        const qtyMatch = block.match(/Quantity[\s\S]*?(\d+)/i);       const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;        const origPrice = extractPriceNumber(block, /Item[\s\vert{}]*Price[\s\S]*?([\d,\.]{3,})/i);       const coupon = extractPriceNumber(block, /Coupon[\s\vert{}]*discount[\s\S]*?(-?[\d,\.]{3,})/i);       let netPrice = extractPriceNumber(block, /Total[\s\vert{}]*Amount[\s\S]*?([\d,\.]{3,})/i);        if (netPrice === 0 && origPrice > 0) {         netPrice = origPrice - coupon;       }        if (orderId !== "N/A" \vert{}\vert{} netPrice > 0) {         rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });       }     }   }    // Strategy 2 (Fallback): Parentheses Order ID Search   if (rawItems.length === 0) {     const itemSection = cleanText.split(/(?:Buyee\s*Service\s*Fee\vert{}Invoice\s*Information\vert{}Shipping\s*Expenses\vert{}Customs\s*Duties\vert{}Breakdown\s*of\s*Other)/i)[0];     const orderMatches = [...itemSection.matchAll(/\(\s*([A-Za-z0-9_-]{8,20})\s*\)/g)];      for (let idx = 0; idx < orderMatches.length; idx++) {       const match = orderMatches[idx];       const orderId = match[1].trim();        const startIdx = Math.max(0, match.index - 120);       const endIdx = (idx + 1 < orderMatches.length) ? orderMatches[idx + 1].index - 120 : itemSection.length;       const chunk = itemSection.substring(startIdx, endIdx);        let siteName = "Buyee Site";       const siteMatch = chunk.match(new RegExp('([^\n\\(\\)]+?)\\s*\\(\\s*' + orderId, 'i'));
       if (siteMatch) {
         siteName = siteMatch[1].replace(/\n/g, ' ').replace(/^[|\s]+/, '').trim();
       }
