@@ -217,8 +217,8 @@ window.processPdfFile = async function(file) {
       fullText += " " + textContent.items.map(item => item.str).join(' ');
     }
 
-    // Check if PDF is a Shipping Receipt vs Order Receipt
-    const isShippingPdf = /Package\s*Reference\s*No|Breakdown\s*of\s*Expenses|International\s*Shipping\s*Fee/i.test(fullText);
+    // Strictly detect Shipping Receipt vs Order Receipt
+    const isShippingPdf = /Package\s*Reference\s*No|International\s*Shipping\s*Fee/i.test(fullText);
 
     if (isShippingPdf) {
       updateStatus("Processing Shipping Package PDF...");
@@ -323,8 +323,8 @@ function parseBuyeeShippingPdf(text, project) {
 function parseBuyeeTextStream(text) {
   const items = [];
   const currentTariff = getCurrentProject().tariffRate || 12.566;
-  const cleanText = text.replace(/Order\s*date([0-9])/gi, 'Order date $1');
-  const orderHeaderRegex = /([A-Z0-9]{10,14})\s*Order\s*date\s*(\d{1,2}\s+[A-Za-z]{3}\s+20\d{2})/gi;
+  const cleanText = text.replace(/Order\s*date\s*:?/gi, 'Order date ').replace(/\s+/g, ' ');
+  const orderHeaderRegex = /([A-Z0-9]{8,20})\s*Order\s*date\s*(\d{1,2}\s+[A-Za-z]{3}\s+20\d{2})/gi;
   const matches = [...cleanText.matchAll(orderHeaderRegex)];
 
   if (matches.length === 0) return items;
