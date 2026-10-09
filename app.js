@@ -65,7 +65,6 @@ function setupEventListeners() {
     const text = document.getElementById('rawTextArea').value;
     if (text.trim()) {
       parseManifestText(text, "Pasted_Manifest.txt");
-      showStatus("Parsed text successfully!", false);
     } else {
       showStatus("Please paste text into the box first.", true);
     }
@@ -92,18 +91,56 @@ async function handleFileUpload(file) {
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
-        const pageStrings = textContent.items.map(item => item.str);
-        fullText += pageStrings.join('\n') + '\n';
+        
+        // Reconstruct coherent text lines using item Y-coordinates & hasEOL
+        const pageLines = [];
+        let currentLine = [];
+        let lastY = null;
+
+        for (const item of textContent.items) {
+          const strVal = item.str ? item.str.trim() : '';
+          if (!strVal) continue;
+
+          const y = item.transform ? item.transform[5] : null;
+
+          if (lastY !== null && y !== null && Math.abs(y - lastY) > 3.0) {
+            if (currentLine.length > 0) {
+              pageLines.push(currentLine.join(' '));
+              currentLine = [];
+            }
+          }
+
+          currentLine.push(strVal);
+          if (y !== null) lastY = y;
+
+          if (item.hasEOL) {
+            if (currentLine.length > 0) {
+              pageLines.push(currentLine.join(' '));
+              currentLine = [];
+            }
+            lastY = null;
+          }
+        }
+
+        if (currentLine.length > 0) {
+          pageLines.push(currentLine.join(' '));
+        }
+
+        fullText += pageLines.join('\n') + '\n';
       }
-      
+
       document.getElementById('rawTextArea').value = fullText;
+
+      if (!fullText.trim()) {
+        showStatus(`No text layer found in ${file.name}. (If scanned image, use 'Paste / View Raw Text' tab).`, true);
+        return;
+      }
+
       parseManifestText(fullText, file.name);
-      showStatus(`Successfully parsed ${file.name}`, false);
     } else {
       const text = await file.text();
       document.getElementById('rawTextArea').value = text;
       parseManifestText(text, file.name);
-      showStatus(`Successfully parsed ${file.name}`, false);
     }
   } catch (err) {
     console.error("PDF Reading Error:", err);
@@ -123,7 +160,7 @@ function showStatus(msg, isError) {
 }
 
 /**
- * Ultra-Robust Buyee Manifest Parser Engine
+ * Robust Buyee Manifest Parser Engine
  */
 function parseManifestText(rawText, fileName) {
   const cleanText = rawText.replace(/\r/g, '');
@@ -142,14 +179,13 @@ function parseManifestText(rawText, fileName) {
   const rawItems = [];
 
   for (let i = 1; i < siteParts.length; i++) {
-    // Cut off global summary tables or footers
     const block = siteParts[i].split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Customs\s*Duties|Breakdown\s*of\s*Other)/i)[0];
 
-    // Order ID: Match 8-20 alphanumeric ID inside parentheses
+    // Order ID: 8-20 alphanumeric characters inside parentheses
     const idMatch = block.match(/\(\s*([A-Za-z0-9_-]{8,20})[\s\vert{}]*\)/i);
     const orderId = idMatch ? idMatch[1].trim() : "N/A";
 
-    // Site Name: Match shop name preceding order ID
+    // Site Name: Match shop name preceding or near order ID
     let siteName = "Buyee Site";
     if (orderId !== "N/A") {
       const siteMatch = block.match(new RegExp('([A-Za-z0-9_ \\.-]+?)\\s*\\(\\s*' + orderId, 'i'));
@@ -181,8 +217,7 @@ function parseManifestText(rawText, fileName) {
       netPrice = origPrice - coupon;
     }
 
-    // Accept valid item blocks
-    if (orderId !== "N/A" && netPrice > 0) {
+    if (orderId !== "N/A" || netPrice > 0) {
       rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });
     }
   }
@@ -215,6 +250,12 @@ function parseManifestText(rawText, fileName) {
 
   updateMetrics();
   renderTable();
+
+  if (items.length > 0) {
+    showStatus(`Successfully extracted ${items.length} item(s) from ${fileName}`, false);
+  } else {
+    showStatus(`PDF text extracted, but no valid line items matched. Click 'Paste / View Raw Text' tab to inspect.`, true);
+  }
 }
 
 function extractRegex(text, regex, defaultValue) {
