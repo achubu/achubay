@@ -1,9 +1,11 @@
 /**
- * Buyee Shipping Manifest & Landed Cost Parser Engine (High-Precision OCR Edition)
+ * Buyee Shipping Manifest & Landed Cost Parser Engine (Japanese CMap & Clean OCR Support)
  */
 
+const PDFJS_VERSION = '3.11.174';
+
 if (typeof pdfjsLib !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
 }
 
 let currentParsedData = null;
@@ -84,10 +86,17 @@ async function handleFileUpload(file) {
   try {
     if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
       const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-      const pdf = await loadingTask.promise;
       
+      // Load PDF with Japanese CMap support for embedded fonts
+      const loadingTask = pdfjsLib.getDocument({
+        data: arrayBuffer,
+        cMapUrl: `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/cmaps/`,
+        cMapPacked: true,
+      });
+      
+      const pdf = await loadingTask.promise;
       let fullText = '';
+
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
@@ -128,9 +137,9 @@ async function handleFileUpload(file) {
         fullText += pageLines.join('\n') + '\n';
       }
 
-      // If text extraction yielded minimal content (< 30 chars), run high-res OCR
+      // Fallback to OCR only if no text layer exists at all
       if (!fullText.trim() || fullText.trim().length < 30) {
-        showStatus(`Image PDF detected in ${file.name}. Enhancing image and running OCR...`, false);
+        showStatus(`Scanned image detected in ${file.name}. Running document OCR...`, false);
         fullText = await performOcrOnPdf(pdf);
       }
 
@@ -149,7 +158,7 @@ async function handleFileUpload(file) {
 }
 
 /**
- * Enhanced OCR Engine with Image Preprocessing & Contrast Sharpening
+ * Clean OCR Engine configured for Document Page Layouts (PSM 6)
  */
 async function performOcrOnPdf(pdf) {
   let ocrText = '';
@@ -160,33 +169,23 @@ async function performOcrOnPdf(pdf) {
 
   const worker = await Tesseract.createWorker('eng');
 
+  // Configure Tesseract to treat page as uniform document block & preserve spacing
+  await worker.setParameters({
+    tessedit_pageseg_mode: '6', // PSM 6: Assume a single uniform block of text
+    preserve_interword_spaces: '1'
+  });
+
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    showStatus(`Performing OCR on page ${pageNum} of ${pdf.numPages}...`, false);
+    showStatus(`Scanning page ${pageNum} of ${pdf.numPages} with document OCR...`, false);
     const page = await pdf.getPage(pageNum);
-    
-    // High-resolution scale for crisp text rendering
-    const viewport = page.getViewport({ scale: 3.5 });
+    const viewport = page.getViewport({ scale: 2.0 });
 
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     canvas.height = viewport.height;
     canvas.width = viewport.width;
 
     await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-
-    // Canvas Image Preprocessing: Increase contrast & binarize grayscale
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imgData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      // Calculate luminosity grayscale value
-      const avg = 0.2126 * data[i] + 0.7152 * data[i+1] + 0.0722 * data[i+2];
-      // Contrast thresholding
-      const binary = avg < 160 ? 0 : 255;
-      data[i]     = binary; // Red
-      data[i + 1] = binary; // Green
-      data[i + 2] = binary; // Blue
-    }
-    ctx.putImageData(imgData, 0, 0);
 
     const { data: ocrResult } = await worker.recognize(canvas);
     ocrText += ocrResult.text + '\n';
@@ -208,7 +207,7 @@ function showStatus(msg, isError) {
 }
 
 /**
- * Buyee Manifest Parser
+ * Buyee Manifest Parser Engine
  */
 function parseManifestText(rawText, fileName) {
   const cleanText = rawText.replace(/\r/g, '');
@@ -296,7 +295,7 @@ function parseManifestText(rawText, fileName) {
   if (items.length > 0) {
     showStatus(`Successfully extracted ${items.length} item(s) from ${fileName}`, false);
   } else {
-    showStatus(`OCR complete, but no item lines matched. Switch to 'Paste / View Raw Text' tab to inspect.`, true);
+    showStatus(`Parsed document, but no item lines matched. Switch to 'Paste / View Raw Text' tab to inspect.`, true);
   }
 }
 
