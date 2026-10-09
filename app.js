@@ -1,5 +1,5 @@
 /**
- * Buyee Shipping Manifest & Landed Cost Parser Engine (with Automatic OCR Fallback)
+ * Buyee Shipping Manifest & Landed Cost Parser Engine (High-Precision OCR Edition)
  */
 
 if (typeof pdfjsLib !== 'undefined') {
@@ -128,9 +128,9 @@ async function handleFileUpload(file) {
         fullText += pageLines.join('\n') + '\n';
       }
 
-      // If no text layer found, run Tesseract.js OCR automatically
+      // If text extraction yielded minimal content (< 30 chars), run high-res OCR
       if (!fullText.trim() || fullText.trim().length < 30) {
-        showStatus(`No embedded text detected in ${file.name}. Running browser OCR engine...`, false);
+        showStatus(`Image PDF detected in ${file.name}. Enhancing image and running OCR...`, false);
         fullText = await performOcrOnPdf(pdf);
       }
 
@@ -143,37 +143,53 @@ async function handleFileUpload(file) {
       parseManifestText(text, file.name);
     }
   } catch (err) {
-    console.error("PDF Reading Error:", err);
+    console.error("PDF Processing Error:", err);
     showStatus(`Error reading PDF: ${err.message}`, true);
   }
 }
 
 /**
- * Optical Character Recognition (OCR) Engine for Scanned Image PDFs
+ * Enhanced OCR Engine with Image Preprocessing & Contrast Sharpening
  */
 async function performOcrOnPdf(pdf) {
   let ocrText = '';
   if (typeof Tesseract === 'undefined') {
-    showStatus("Tesseract OCR library not loaded. Check internet connection.", true);
+    showStatus("Tesseract OCR script not loaded. Check internet connection.", true);
     return "";
   }
 
   const worker = await Tesseract.createWorker('eng');
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    showStatus(`Scanning page ${pageNum} of ${pdf.numPages} using OCR...`, false);
+    showStatus(`Performing OCR on page ${pageNum} of ${pdf.numPages}...`, false);
     const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 2.0 });
+    
+    // High-resolution scale for crisp text rendering
+    const viewport = page.getViewport({ scale: 3.5 });
 
     const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d');
     canvas.height = viewport.height;
     canvas.width = viewport.width;
 
-    await page.render({ canvasContext: context, viewport: viewport }).promise;
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
 
-    const { data } = await worker.recognize(canvas);
-    ocrText += data.text + '\n';
+    // Canvas Image Preprocessing: Increase contrast & binarize grayscale
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      // Calculate luminosity grayscale value
+      const avg = 0.2126 * data[i] + 0.7152 * data[i+1] + 0.0722 * data[i+2];
+      // Contrast thresholding
+      const binary = avg < 160 ? 0 : 255;
+      data[i]     = binary; // Red
+      data[i + 1] = binary; // Green
+      data[i + 2] = binary; // Blue
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    const { data: ocrResult } = await worker.recognize(canvas);
+    ocrText += ocrResult.text + '\n';
   }
 
   await worker.terminate();
@@ -192,13 +208,13 @@ function showStatus(msg, isError) {
 }
 
 /**
- * Robust Buyee Manifest Parser Engine
+ * Buyee Manifest Parser
  */
 function parseManifestText(rawText, fileName) {
   const cleanText = rawText.replace(/\r/g, '');
 
-  const packageRef = extractRegex(cleanText, /Package\s*Reference\s*No\.?\s*[\n\r\s|]*([A-Z0-9]+)/i, "N/A");
-  const delivDate = extractRegex(cleanText, /Date\s*of\s*Delivery\s*:?\s*[\n\r\s|]*(\d{4}[-\/]\d{2}[-\/]\d{2})/i, "N/A");
+  const packageRef = extractRegex(cleanText, /(?:Package\s*Reference\s*No|Package\s*Ref)[\s\S]*?([A-Z0-9]{8,15})/i, "N/A");
+  const delivDate = extractRegex(cleanText, /Date\s*of\s*Delivery[\s\S]*?(\d{4}[-\/]\d{2}[-\/]\d{2})/i, "N/A");
 
   const intlShipping = extractPriceNumber(cleanText, /International\s*Shipping\s*Fee[\s\S]*?([\d,\.]{3,})/i);
   const customsDuty = extractPriceNumber(cleanText, /Customs\s*Duty[\s\S]*?([\d,\.]{3,})/i);
@@ -280,7 +296,7 @@ function parseManifestText(rawText, fileName) {
   if (items.length > 0) {
     showStatus(`Successfully extracted ${items.length} item(s) from ${fileName}`, false);
   } else {
-    showStatus(`Document parsed, but no valid line items matched. Check 'Paste / View Raw Text' tab.`, true);
+    showStatus(`OCR complete, but no item lines matched. Switch to 'Paste / View Raw Text' tab to inspect.`, true);
   }
 }
 
