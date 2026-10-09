@@ -92,8 +92,6 @@ async function handleFileUpload(file) {
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
-        
-        // Extract text tokens while preserving newline spacing
         const pageStrings = textContent.items.map(item => item.str);
         fullText += pageStrings.join('\n') + '\n';
       }
@@ -109,7 +107,7 @@ async function handleFileUpload(file) {
     }
   } catch (err) {
     console.error("PDF Reading Error:", err);
-    showStatus(`Error reading PDF: ${err.message}. Switch to 'Paste Raw Text' tab to inspect output.`, true);
+    showStatus(`Error reading PDF: ${err.message}`, true);
   }
 }
 
@@ -125,13 +123,13 @@ function showStatus(msg, isError) {
 }
 
 /**
- * Robust Buyee Manifest Parser Logic
+ * Ultra-Robust Buyee Manifest Parser Engine
  */
 function parseManifestText(rawText, fileName) {
   const cleanText = rawText.replace(/\r/g, '');
 
-  const packageRef = extractRegex(cleanText, /Package\s*Reference\s*No\.?\s*\n?\s*([A-Z0-9]+)/i, "N/A");
-  const delivDate = extractRegex(cleanText, /Date\s*of\s*Delivery\s*:?\s*(\d{4}[-\/]\d{2}[-\/]\d{2})/i, "N/A");
+  const packageRef = extractRegex(cleanText, /Package\s*Reference\s*No\.?\s*[\n\r\s|]*([A-Z0-9]+)/i, "N/A");
+  const delivDate = extractRegex(cleanText, /Date\s*of\s*Delivery\s*:?\s*[\n\r\s|]*(\d{4}[-\/]\d{2}[-\/]\d{2})/i, "N/A");
 
   const intlShipping = extractPriceNumber(cleanText, /International\s*Shipping\s*Fee[\s\S]*?([\d,\.]{3,})/i);
   const customsDuty = extractPriceNumber(cleanText, /Customs\s*Duty[\s\S]*?([\d,\.]{3,})/i);
@@ -139,46 +137,51 @@ function parseManifestText(rawText, fileName) {
   const clearanceFee = extractPriceNumber(cleanText, /Customs\s*Clearance\s*Fee[\s\S]*?([\d,\.]{3,})/i);
   const otherFees = buyeeFee + clearanceFee;
 
-  // Flexible split on "Shopping Site (ID)" regardless of embedded line breaks
-  const siteParts = cleanText.split(/Shopping\s*Site\s*\(\s*ID\s*\)/i);
+  // Split flexibly across "Shopping Site" regardless of pipes or line breaks
+  const siteParts = cleanText.split(/Shopping[\s|]*Site/i);
   const rawItems = [];
 
   for (let i = 1; i < siteParts.length; i++) {
-    // Strip trailing footer tables
-    const part = siteParts[i].split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Breakdown\s*of\s*Other)/i)[0];
+    // Cut off global summary tables or footers
+    const block = siteParts[i].split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Customs\s*Duties|Breakdown\s*of\s*Other)/i)[0];
 
-    // Order ID: 8 to 15 alphanumeric chars in parentheses
-    const idMatch = part.match(/\(\s*([A-Z0-9]{8,15})[\s\vert{}]*\)/i);
+    // Order ID: Match 8-20 alphanumeric ID inside parentheses
+    const idMatch = block.match(/\(\s*([A-Za-z0-9_-]{8,20})[\s\vert{}]*\)/i);
     const orderId = idMatch ? idMatch[1].trim() : "N/A";
 
-    // Site Name
-    const siteMatch = part.match(/\|\s*([^\(\n\r]+)/);
-    const siteName = siteMatch ? siteMatch[1].replace(/\n/g, ' ').trim() : "Buyee Site";
+    // Site Name: Match shop name preceding order ID
+    let siteName = "Buyee Site";
+    if (orderId !== "N/A") {
+      const siteMatch = block.match(new RegExp('([A-Za-z0-9_ \\.-]+?)\\s*\\(\\s*' + orderId, 'i'));
+      if (siteMatch) {
+        siteName = siteMatch[1].replace(/\n/g, ' ').replace(/^[|\s]+/, '').trim();
+      }
+    }
 
-    // Item Name: between Item Name and Quantity
-    const nameMatch = part.match(/Item\s*Name\s*\n([\s\S]+?)(?=\n\s*(?:\||\s)*Quantity)/i);
+    // Item Name: text between Item Name and Quantity
+    const nameMatch = block.match(/Item[\s|]*Name[\s|]*\n?([\s\S]+?)(?=\n?[\s|]*Quantity)/i);
     let itemName = "Item";
     if (nameMatch) {
       const lines = nameMatch[1].split('\n')
-        .map(l => l.replace(/^\s*\|\s*/, '').trim())
+        .map(l => l.replace(/^[|\s]+/, '').trim())
         .filter(l => l && l !== '|');
       itemName = lines.join(' ');
     }
 
     // Quantity
-    const qtyMatch = part.match(/Quantity[\s\S]*?(\d+)/i);
+    const qtyMatch = block.match(/Quantity[\s\S]*?(\d+)/i);
     const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
     // Prices
-    const origPrice = extractPriceNumber(part, /Item\s*Price[\s\S]*?([\d,\.]{3,})/i);
-    const coupon = extractPriceNumber(part, /Coupon\s*discount[\s\S]*?(-?[\d,\.]{3,})/i);
-    let netPrice = extractPriceNumber(part, /Total\s*Amount[\s\S]*?([\d,\.]{3,})/i);
+    const origPrice = extractPriceNumber(block, /Item[\s|]*Price[\s\S]*?([\d,\.]{3,})/i);
+    const coupon = extractPriceNumber(block, /Coupon[\s|]*discount[\s\S]*?(-?[\d,\.]{3,})/i);
+    let netPrice = extractPriceNumber(block, /Total[\s|]*Amount[\s\S]*?([\d,\.]{3,})/i);
 
     if (netPrice === 0 && origPrice > 0) {
       netPrice = origPrice - coupon;
     }
 
-    // Only add valid items (filtering out summary/footer table splits)
+    // Accept valid item blocks
     if (orderId !== "N/A" && netPrice > 0) {
       rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });
     }
