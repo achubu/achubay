@@ -1,224 +1,176 @@
 <!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Buyee Landed Cost Calculator</title>
-  
-  <!-- Tailwind CSS -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Buyee Shipping Manifest & Landed Cost Analyzer</title>
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
-
-  <!-- PDF.js Library -->
+  <!-- PDF.js CDN for client-side PDF text extraction -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-
-  <!-- SheetJS Library for Excel Export -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  </script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0f9ff',
+              500: '#0284c7',
+              600: '#0369a1',
+              700: '#075985',
+              900: '#0c4a6e',
+            }
+          }
+        }
+      }
+    }
+  </script>
 </head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-brand-500 selection:text-white">
 
-<body class="bg-slate-900 text-slate-100 min-h-screen font-sans flex flex-col">
-
-  <!-- Top Navigation Header -->
-  <header class="bg-slate-800/80 border-b border-slate-700/80 backdrop-blur sticky top-0 z-50">
+  <!-- Header / Navigation -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="p-2 bg-indigo-600 rounded-lg text-white">
-          <i data-lucide="calculator" class="w-5 h-5"></i>
+        <div class="p-2 bg-brand-600/20 text-brand-400 rounded-lg border border-brand-500/30">
+          <i data-lucide="package-search" class="w-6 h-6"></i>
         </div>
-        <h1 class="text-lg font-bold text-slate-100">Achubay <span class="text-xs font-normal text-indigo-400 bg-indigo-950/60 px-2 py-0.5 rounded-full border border-indigo-800/50">Landed Cost</span></h1>
+        <div>
+          <h1 class="font-bold text-lg text-slate-100 leading-none">Buyee Manifest Parser</h1>
+          <p class="text-xs text-slate-400 mt-1">Landed Cost & Tariff Splitter</p>
+        </div>
       </div>
-
-      <!-- Project Selection Controls -->
-      <div class="flex items-center gap-2">
-        <select id="projectSelect" onchange="switchProject(this.value)" class="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500">
-        </select>
-        
-        <button onclick="createNewProjectPrompt()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 p-1.5 rounded-lg text-xs transition" title="New Project">
-          <i data-lucide="plus" class="w-4 h-4"></i>
+      <div class="flex items-center gap-3">
+        <button id="exportCsvBtn" class="flex items-center gap-2 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700 transition">
+          <i data-lucide="download" class="w-4 h-4"></i> Export CSV
         </button>
-        
-        <button onclick="deleteCurrentProject()" class="bg-slate-700 hover:bg-rose-900/60 text-slate-200 hover:text-rose-300 p-1.5 rounded-lg text-xs transition" title="Delete Project">
-          <i data-lucide="trash-2" class="w-4 h-4"></i>
+        <button id="exportJsonBtn" class="flex items-center gap-2 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700 transition">
+          <i data-lucide="file-json" class="w-4 h-4"></i> Export JSON
         </button>
-
-        <div class="h-4 w-px bg-slate-700 mx-1"></div>
-
-        <button onclick="exportToExcel()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5">
-          <i data-lucide="file-spreadsheet" class="w-4 h-4"></i>
-          Export Excel
-        </button>
-
-        <button onclick="exportBackupJSON()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 p-1.5 rounded-lg text-xs transition" title="Backup Data (JSON)">
-          <i data-lucide="download" class="w-4 h-4"></i>
-        </button>
-
-        <label class="bg-slate-700 hover:bg-slate-600 text-slate-200 p-1.5 rounded-lg text-xs transition cursor-pointer" title="Restore Data (JSON)">
-          <i data-lucide="upload" class="w-4 h-4"></i>
-          <input type="file" accept=".json" onchange="importBackupJSON(event)" class="hidden">
-        </label>
       </div>
     </div>
   </header>
 
   <!-- Main Container -->
-  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-grow w-full flex flex-col gap-6">
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
 
-    <!-- Top Upload & Config Section -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      
-      <!-- Separate PDF Import Panel -->
-      <div class="lg:col-span-1 bg-slate-800/60 border border-slate-700/80 rounded-xl p-5 flex flex-col justify-between">
-        <div>
-          <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">PDF Ingestion</h2>
-          
-          <div class="space-y-3">
-            <!-- Order List Upload Button -->
-            <label class="flex items-center justify-between p-3 bg-slate-900/80 hover:bg-slate-800 border border-slate-700 hover:border-indigo-500 rounded-lg cursor-pointer transition group">
-              <div class="flex items-center gap-2.5">
-                <div class="p-1.5 bg-indigo-950 text-indigo-400 rounded-md border border-indigo-800/50 group-hover:bg-indigo-600 group-hover:text-white transition">
-                  <i data-lucide="file-plus" class="w-4 h-4"></i>
-                </div>
-                <div class="text-left">
-                  <div class="text-xs font-semibold text-slate-200">Import Order Receipts</div>
-                  <div class="text-[10px] text-slate-400">Buyee Order PDF lists</div>
-                </div>
-              </div>
-              <input type="file" accept=".pdf" onchange="handleOrderFileSelect(event)" class="hidden">
-            </label>
-
-            <!-- Shipping Manifest Upload Button -->
-            <label class="flex items-center justify-between p-3 bg-slate-900/80 hover:bg-slate-800 border border-slate-700 hover:border-amber-500/80 rounded-lg cursor-pointer transition group">
-              <div class="flex items-center gap-2.5">
-                <div class="p-1.5 bg-amber-950 text-amber-400 rounded-md border border-amber-800/50 group-hover:bg-amber-600 group-hover:text-white transition">
-                  <i data-lucide="truck" class="w-4 h-4"></i>
-                </div>
-                <div class="text-left">
-                  <div class="text-xs font-semibold text-slate-200">Import Shipping Manifest</div>
-                  <div class="text-[10px] text-slate-400">Package shipping PDFs</div>
-                </div>
-              </div>
-              <input type="file" accept=".pdf" onchange="handleShippingFileSelect(event)" class="hidden">
-            </label>
+    <!-- Upload Area & Drag-and-Drop Zone -->
+    <section class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl relative">
+      <div id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-brand-500 transition-colors rounded-xl p-8 text-center cursor-pointer bg-slate-950/50 group">
+        <input type="file" id="pdfFileInput" accept="application/pdf,text/plain" class="hidden" />
+        <div class="flex flex-col items-center justify-center gap-3">
+          <div class="p-4 rounded-full bg-slate-800/80 text-brand-400 group-hover:scale-110 transition-transform">
+            <i data-lucide="upload-cloud" class="w-8 h-8"></i>
           </div>
-        </div>
-
-        <p id="uploadStatus" class="text-[11px] font-mono text-indigo-300 mt-4 bg-slate-900/80 px-3 py-1.5 rounded border border-indigo-900/50 truncate text-center">Status: Ready for PDF</p>
-      </div>
-
-      <!-- Global Controls Panel -->
-      <div class="lg:col-span-2 bg-slate-800/60 border border-slate-700/80 rounded-xl p-5 flex flex-col justify-between">
-        <div>
-          <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Global Cost Settings</h2>
-          
-          <div class="max-w-xs">
-            <label class="block text-xs font-medium text-slate-300 mb-1">Global Tariff Rate (%)</label>
-            <input type="number" id="globalTariffInput" step="0.001" value="12.566" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-rose-300 font-mono font-bold focus:outline-none focus:border-indigo-500">
+          <div>
+            <p class="font-semibold text-slate-200 text-base">Drop your Buyee Shipping Manifest PDF here</p>
+            <p class="text-xs text-slate-400 mt-1">Parses Package Reference, Tracking, Items, Shipping, Customs Duties & Allocates Landed Costs</p>
           </div>
-        </div>
-
-        <!-- Action Buttons Bar -->
-        <div class="mt-5 pt-3 border-t border-slate-700/60 flex flex-wrap gap-2 justify-end">
-          <button id="translateBtn" onclick="translateAllExistingItems()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5">
-            <i data-lucide="languages" class="w-4 h-4"></i>
-            Translate Titles to English
-          </button>
-
-          <button id="applyGlobalBtn" onclick="applyGlobalChangesToAllRows()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-1.5 rounded-lg text-xs shadow transition flex items-center gap-1.5">
-            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-            Apply Global Tariff to All Rows
+          <button type="button" class="mt-2 text-xs font-medium bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-lg transition shadow-md">
+            Browse File
           </button>
         </div>
       </div>
-    </div>
-
-    <!-- Summary Statistics Dashboard -->
-    <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
-      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
-        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Items</p>
-        <p id="statCount" class="text-xl font-bold text-slate-100 mt-1 font-mono">0</p>
+      <!-- Processing Status Indicator -->
+      <div id="statusAlert" class="hidden mt-4 p-3 rounded-lg bg-slate-800 text-xs flex items-center gap-2 text-slate-300">
+        <i data-lucide="loader-2" class="w-4 h-4 animate-spin text-brand-400" id="statusSpinner"></i>
+        <span id="statusMessage">Processing PDF document...</span>
       </div>
+    </section>
 
-      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
-        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Base Item Total ($)</p>
-        <p id="statTotalUSD" class="text-xl font-bold text-sky-400 mt-1 font-mono">$0.00</p>
-      </div>
-
-      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
-        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Shipping ($)</p>
-        <p id="statTotalShipping" class="text-xl font-bold text-amber-300 mt-1 font-mono">$0.00</p>
-      </div>
-
-      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
-        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Tariff ($)</p>
-        <p id="statTotalTariff" class="text-xl font-bold text-rose-400 mt-1 font-mono">$0.00</p>
-      </div>
-
-      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4 col-span-2 sm:col-span-1">
-        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Landed Cost ($)</p>
-        <p id="statTotalLanded" class="text-xl font-bold text-emerald-400 mt-1 font-mono">$0.00</p>
-      </div>
-    </div>
-
-    <!-- Table Section -->
-    <div class="bg-slate-800/60 border border-slate-700/80 rounded-xl overflow-hidden flex flex-col">
-      
-      <!-- Table Controls Bar -->
-      <div class="p-4 border-b border-slate-700/80 flex flex-wrap items-center justify-between gap-3 bg-slate-800/40">
-        <div class="flex items-center gap-3 flex-grow max-w-xs">
-          <div class="relative w-full">
-            <i data-lucide="search" class="w-4 h-4 absolute left-2.5 top-2.5 text-slate-400"></i>
-            <input type="text" id="searchInput" oninput="renderTable()" placeholder="Search title, seller, order ID..." class="w-full bg-slate-900 border border-slate-700 text-xs rounded-lg pl-8 pr-3 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
-          </div>
+    <!-- Summary Metrics Grid -->
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div class="flex items-center justify-between text-slate-400 text-xs">
+          <span>Items Extracted</span>
+          <i data-lucide="layers" class="w-4 h-4 text-brand-400"></i>
         </div>
+        <p id="metricTotalItems" class="text-2xl font-bold text-slate-100 mt-2">0</p>
+        <p id="metricManifestRef" class="text-[11px] text-slate-500 mt-1 font-mono">Manifest: N/A</p>
+      </div>
 
-        <div class="flex items-center gap-2">
-          <span id="displayedCountText" class="text-xs text-slate-400 mr-2">Showing 0 of 0 items</span>
-          
-          <button onclick="addNewRow()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1">
-            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Line
-          </button>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div class="flex items-center justify-between text-slate-400 text-xs">
+          <span>Net Item Cost</span>
+          <i data-lucide="shopping-bag" class="w-4 h-4 text-emerald-400"></i>
+        </div>
+        <p id="metricNetCost" class="text-2xl font-bold text-emerald-400 mt-2">¥0</p>
+        <p class="text-[11px] text-slate-500 mt-1">Item Purchase Subtotal</p>
+      </div>
 
-          <button onclick="deleteSelectedRows()" class="bg-slate-700 hover:bg-rose-900/50 text-slate-200 hover:text-rose-300 text-xs px-3 py-1.5 rounded-lg transition flex items-center gap-1">
-            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete Selected
-          </button>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div class="flex items-center justify-between text-slate-400 text-xs">
+          <span>Intl Shipping</span>
+          <i data-lucide="plane" class="w-4 h-4 text-blue-400"></i>
+        </div>
+        <p id="metricShipping" class="text-2xl font-bold text-blue-400 mt-2">¥0</p>
+        <p class="text-[11px] text-slate-500 mt-1">Split proportionally</p>
+      </div>
 
-          <button onclick="clearAllItems()" class="bg-slate-700 hover:bg-rose-900/80 text-slate-200 hover:text-rose-200 text-xs px-3 py-1.5 rounded-lg transition">
-            Clear All
-          </button>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div class="flex items-center justify-between text-slate-400 text-xs">
+          <span>Tariffs & Duty</span>
+          <i data-lucide="landmark" class="w-4 h-4 text-amber-400"></i>
+        </div>
+        <p id="metricDuty" class="text-2xl font-bold text-amber-400 mt-2">¥0</p>
+        <p class="text-[11px] text-slate-500 mt-1">Customs Duty tax</p>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div class="flex items-center justify-between text-slate-400 text-xs">
+          <span>Total Landed Cost</span>
+          <i data-lucide="calculator" class="w-4 h-4 text-purple-400"></i>
+        </div>
+        <p id="metricGrandTotal" class="text-2xl font-bold text-purple-400 mt-2">¥0</p>
+        <p class="text-[11px] text-slate-500 mt-1">Items + Shipping + Duty + Fees</p>
+      </div>
+    </section>
+
+    <!-- Data Controls & Table -->
+    <section class="bg-slate-900 border border-slate-800 rounded-xl shadow-xl overflow-hidden">
+      <!-- Toolbar -->
+      <div class="p-4 border-b border-slate-800 flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <div class="relative w-full sm:w-80">
+          <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"></i>
+          <input type="text" id="searchInput" placeholder="Search order ID, item name, site..." class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500" />
+        </div>
+        <div class="flex items-center gap-2 text-xs text-slate-400">
+          <i data-lucide="info" class="w-4 h-4 text-brand-400"></i>
+          <span>Shipping, duties & fees are split proportionally based on item net price.</span>
         </div>
       </div>
 
-      <!-- Inventory Data Table -->
+      <!-- Table -->
       <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs text-slate-200">
-          <thead class="bg-slate-900/80 text-slate-400 uppercase tracking-wider text-[10px] font-semibold border-b border-slate-700">
-            <tr>
-              <th class="p-3 text-center"><input type="checkbox" onchange="toggleSelectAll(this)"></th>
-              <th class="p-3">Order Date</th>
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="bg-slate-950/70 border-b border-slate-800 text-slate-400 font-medium">
               <th class="p-3">Order ID</th>
-              <th class="p-3">Item Title</th>
-              <th class="p-3">Seller</th>
-              <th class="p-3 text-right">Qty</th>
-              <th class="p-3 text-right">Unit Price ($)</th>
-              <th class="p-3 text-right">Base Cost ($)</th>
-              <th class="p-3 text-right">Shipping ($)</th>
-              <th class="p-3 text-right">Tariff %</th>
-              <th class="p-3 text-right">Tariff ($)</th>
-              <th class="p-3 text-right">Landed Cost ($)</th>
-              <th class="p-3 text-center">Action</th>
+              <th class="p-3">Shopping Site</th>
+              <th class="p-3">Item Name</th>
+              <th class="p-3 text-right">Base Price</th>
+              <th class="p-3 text-right">Net Price</th>
+              <th class="p-3 text-right text-blue-400">Split Shipping</th>
+              <th class="p-3 text-right text-amber-400">Split Duty</th>
+              <th class="p-3 text-right text-slate-400">Split Fees</th>
+              <th class="p-3 text-right text-purple-300 font-bold">Landed Cost</th>
             </tr>
           </thead>
-          <tbody id="inventoryTbody" class="divide-y divide-slate-700/50">
-            <!-- Dynamic items rendered by JavaScript -->
+          <tbody id="manifestTableBody" class="divide-y divide-slate-800/60 text-slate-300 font-mono">
+            <!-- Dynamic Rows rendered via JS -->
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   </main>
 
-  <!-- Application Logic -->
+  <!-- JS Implementation -->
   <script src="app.js"></script>
 </body>
 </html>
