@@ -1,4 +1,7 @@
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+// PDF.js Worker Configuration
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
 
 const STORAGE_KEY = 'buyee_inventory_data_v1';
 
@@ -30,16 +33,47 @@ document.addEventListener('DOMContentLoaded', () => {
   lucide.createIcons();
   renderProjectDropdown();
   loadProjectUI();
+  setupFileInputs();
+  setupDropZone();
 });
+
+// Binds all <input type="file"> elements to handleFileSelect
+function setupFileInputs() {
+  const inputs = document.querySelectorAll('input[type="file"]');
+  inputs.forEach(input => {
+    input.removeEventListener('change', handleFileSelect);
+    input.addEventListener('change', handleFileSelect);
+  });
+}
+
+function setupDropZone() {
+  const dropZone = document.getElementById('dropZone');
+  if (!dropZone) return;
+
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    dropZone.addEventListener(eventName, (e) => { e.preventDefault(); e.stopPropagation(); }, false);
+  });
+
+  ['dragenter', 'dragover'].forEach(eventName => {
+    dropZone.addEventListener(eventName, () => dropZone.classList.add('border-indigo-500', 'bg-slate-700/60'), false);
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    dropZone.addEventListener(eventName, () => dropZone.classList.remove('border-indigo-500', 'bg-slate-700/60'), false);
+  });
+
+  dropZone.addEventListener('drop', (e) => {
+    const dt = e.dataTransfer;
+    if (dt && dt.files && dt.files.length > 0) {
+      processPdfFile(dt.files[0]);
+    }
+  }, false);
+}
 
 function loadStoreFromLocalStorage() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) {
-    try {
-      store = JSON.parse(saved);
-    } catch (e) {
-      console.error('Failed to parse saved state:', e);
-    }
+    try { store = JSON.parse(saved); } catch (e) { console.error('Failed to parse saved state:', e); }
   }
 }
 
@@ -83,14 +117,8 @@ function createNewProjectPrompt() {
   if (name && name.trim()) {
     const id = 'proj_' + Date.now();
     store.projects[id] = {
-      id,
-      name: name.trim(),
-      tariffRate: 10.0,
-      shippingUSD: 0.0,
-      feesUSD: 0.0,
-      allocationStrategy: 'proportional',
-      fxMode: 'receipt',
-      items: []
+      id, name: name.trim(), tariffRate: 10.0, shippingUSD: 0.0,
+      feesUSD: 0.0, allocationStrategy: 'proportional', fxMode: 'receipt', items: []
     };
     store.activeProjectId = id;
     saveStoreToLocalStorage();
@@ -121,8 +149,7 @@ function getFxRate(item, fxMode) {
     const parts = item.orderDate.split(' ');
     if (parts.length >= 3) {
       const monthMap = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06', Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
-      const monthStr = monthMap[parts[1]] || '10';
-      const key = `${parts[2]}-${monthStr}`;
+      const key = `${parts[2]}-${monthMap[parts[1]] || '10'}`;
       if (historicalFxTable[key]) return historicalFxTable[key];
     }
   }
@@ -249,14 +276,31 @@ function deleteSelectedRows() { getCurrentProject().items = getCurrentProject().
 function clearAllItems() { if(confirm('Clear all items in active project?')) { getCurrentProject().items = []; updateCalculations(); } }
 
 async function handleFileSelect(event) {
-  const file = event.target.files[0];
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  console.log("File selected via click:", file.name);
+  await processPdfFile(file);
+  event.target.value = ''; // Reset input to allow re-selecting the same file if needed
+}
+
+async function processPdfFile(file) {
   if (!file) return;
 
   try {
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = "";
     
+    if (typeof pdfjsLib === 'undefined') {
+      alert("Error: PDF.js library is not loaded on this page.");
+      return;
+    }
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    console.log("PDF loaded successfully. Page count:", pdf.numPages);
+    
+    let fullText = "";
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
@@ -264,27 +308,24 @@ async function handleFileSelect(event) {
     }
 
     const parsed = parseBuyeeTextStream(fullText);
+    console.log("Extracted items:", parsed.length);
     
     if (parsed.length > 0) {
       getCurrentProject().items = [...parsed, ...getCurrentProject().items];
       updateCalculations();
       alert(`Successfully imported ${parsed.length} orders from PDF!`);
     } else {
-      alert("No matching Buyee order records could be extracted from this PDF.");
+      alert("PDF read successfully, but no order records matched the Buyee parser layout.");
     }
   } catch (err) {
-    console.error("PDF Parsing Error:", err);
-    alert("Error reading PDF file: " + err.message);
+    console.error("PDF Processing Error:", err);
+    alert("Error reading PDF: " + err.message);
   }
 }
 
 function parseBuyeeTextStream(text) {
   const items = [];
-  
-  // Clean spacing artifacts around "Order date"
   const cleanText = text.replace(/Order\s*date([0-9])/gi, 'Order date $1');
-
-  // Match Order IDs (12-digit numbers, M-prefix, F-prefix, etc.) followed by Order date
   const orderHeaderRegex = /([A-Z0-9]{10,14})\s*Order\s*date\s*(\d{1,2}\s+[A-Za-z]{3}\s+20\d{2})/gi;
   const matches = [...cleanText.matchAll(orderHeaderRegex)];
 
@@ -297,34 +338,20 @@ function parseBuyeeTextStream(text) {
     const endIndex = (index < matches.length - 1) ? matches[index + 1].index : cleanText.length;
     const block = cleanText.slice(startIndex, endIndex);
 
-    // Bypasses cancelled or out-of-stock orders
-    if (block.includes('out of stock') || block.includes('Order was cancelled')) {
-      return;
-    }
+    if (block.includes('out of stock') || block.includes('Order was cancelled')) return;
 
-    // 1. Seller / Shop Name
     let seller = "Buyee Seller";
     const sellerMatch = block.match(/(?:Shop Name|Seller)\s*([^\n\r]+?)(?=\s*(?:Total Amount|After your|Details|Purchase|Transaction|Quantity|Order date|$))/i);
-    if (sellerMatch && sellerMatch[1]) {
-      seller = sellerMatch[1].replace(/[-–—]\s*$/, '').trim();
-    }
+    if (sellerMatch && sellerMatch[1]) seller = sellerMatch[1].replace(/[-–—]\s*$/, '').trim();
 
-    // 2. Price JPY
     let priceJPY = 0;
-    const jpyMatch = block.match(/(?:Requested Item Price|Item Price)\s*:?\s*([\d,]+)\s*YEN/i) || 
-                     block.match(/Total Amount\s*:?\s*([\d,]+)\s*YEN/i);
-    if (jpyMatch) {
-      priceJPY = parseFloat(jpyMatch[1].replace(/,/g, '')) || 0;
-    }
+    const jpyMatch = block.match(/(?:Requested Item Price|Item Price)\s*:?\s*([\d,]+)\s*YEN/i) || block.match(/Total Amount\s*:?\s*([\d,]+)\s*YEN/i);
+    if (jpyMatch) priceJPY = parseFloat(jpyMatch[1].replace(/,/g, '')) || 0;
 
-    // 3. Printed USD Conversion Rate
     let printedUSD = null;
     const usdMatches = [...block.matchAll(/\(US\$\s*([\d,]+\.\d{2})\)/gi)];
-    if (usdMatches.length > 0) {
-      printedUSD = parseFloat(usdMatches[usdMatches.length - 1][1].replace(/,/g, ''));
-    }
+    if (usdMatches.length > 0) printedUSD = parseFloat(usdMatches[usdMatches.length - 1][1].replace(/,/g, ''));
 
-    // 4. Quantity (Handles '1', 'l', or 'I')
     let qty = 1;
     const qtyMatch = block.match(/Quantity\s*(\d+|[lI])\s*item\(s\)/i);
     if (qtyMatch) {
@@ -332,19 +359,12 @@ function parseBuyeeTextStream(text) {
       qty = (rawQty === 'l' || rawQty === 'I') ? 1 : (parseInt(rawQty, 10) || 1);
     }
 
-    // 5. Item Title
     let itemTitle = "Proxy Purchase Item";
     const qtyIdx = block.search(/Quantity\s*(\d+|[lI])\s*item\(s\)/i);
-    
     if (qtyIdx > 0) {
       let snippet = block.slice(Math.max(0, qtyIdx - 160), qtyIdx).trim();
-      
-      // Clean up order status and system text preceding the title
       snippet = snippet.replace(/.*(?:Purchase request items|Transaction Delivery|Arrived at Warehouse|Shipped|Order Completed|Order Received|Details)\s*/gi, '').trim();
-      
-      if (snippet.length > 0) {
-        itemTitle = snippet.slice(-120).replace(/^[\s•:-]+/, '').trim();
-      }
+      if (snippet.length > 0) itemTitle = snippet.slice(-120).replace(/^[\s•:-]+/, '').trim();
     }
 
     if (priceJPY > 0) {
