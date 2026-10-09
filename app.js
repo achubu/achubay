@@ -38,7 +38,49 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDropZone();
 });
 
-// Explicit action button function to push current inputs to all rows
+// Helper to translate single text string (Client-Side)
+async function translateText(text) {
+  if (!text || typeof text !== 'string') return text;
+  const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
+  if (!hasJapanese) return text;
+
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t&q=${encodeURIComponent(text)}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data && data[0]) {
+      return data[0].map(item => item[0]).join('');
+    }
+  } catch (err) {
+    console.warn("Translation skipped for item:", err);
+  }
+  return text;
+}
+
+// Function triggered by "Translate to English" button
+window.translateAllExistingItems = async function() {
+  const p = getCurrentProject();
+  if (!p.items || p.items.length === 0) {
+    alert("No items in list to translate.");
+    return;
+  }
+  
+  const button = document.getElementById('translateBtn');
+  if (button) button.innerText = "Translating...";
+
+  let translatedCount = 0;
+  for (let item of p.items) {
+    item.itemTitle = await translateText(item.itemTitle);
+    item.seller = await translateText(item.seller);
+    translatedCount++;
+  }
+
+  updateCalculations();
+  if (button) button.innerText = "Translate to English";
+  alert(`Finished translating ${translatedCount} items!`);
+};
+
+// Force apply global settings (Tariff %, Shipping, Fees) across imported lines
 window.applyGlobalChangesToAllRows = function() {
   const p = getCurrentProject();
   if (!p.items || p.items.length === 0) {
@@ -53,51 +95,12 @@ window.applyGlobalChangesToAllRows = function() {
   p.allocationStrategy = document.getElementById('allocationStrategy')?.value || 'proportional';
   p.fxMode = document.getElementById('fxMode')?.value || 'receipt';
 
-  // Force overwrite item-level tariff rates with global rate
   p.items.forEach(item => {
     item.tariffPercent = tariffVal;
   });
 
   updateCalculations();
-  alert(`Applied settings (${tariffVal}% Tariff, $${p.shippingUSD.toFixed(2)} Shipping, $${p.feesUSD.toFixed(2)} Fees) to all ${p.items.length} items!`);
-};
-
-async function translateText(text) {
-  if (!text || typeof text !== 'string') return text;
-  const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
-  if (!hasJapanese) return text;
-
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t&q=${encodeURIComponent(text)}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    if (data && data[0]) {
-      return data[0].map(item => item[0]).join('');
-    }
-  } catch (err) {
-    console.warn("Translation failed:", err);
-  }
-  return text;
-}
-
-window.translateAllExistingItems = async function() {
-  const p = getCurrentProject();
-  if (!p.items || p.items.length === 0) {
-    alert("No items to translate.");
-    return;
-  }
-  
-  const button = document.getElementById('translateBtn');
-  if (button) button.innerText = "Translating...";
-
-  for (let item of p.items) {
-    item.itemTitle = await translateText(item.itemTitle);
-    item.seller = await translateText(item.seller);
-  }
-
-  updateCalculations();
-  if (button) button.innerText = "Translate to English";
-  alert("Translation complete!");
+  alert(`Applied global settings (${tariffVal}% Tariff, $${p.shippingUSD.toFixed(2)} Shipping, $${p.feesUSD.toFixed(2)} Fees) to all ${p.items.length} items!`);
 };
 
 function setupGlobalInputs() {
@@ -285,9 +288,6 @@ function updateCalculations() {
   const statCount = document.getElementById('statCount');
   if (statCount) statCount.innerText = items.length;
 
-  const statTotalJPY = document.getElementById('statTotalJPY');
-  if (statTotalJPY) statTotalJPY.innerText = '$' + totalBaseUSD.toFixed(2);
-
   const statTotalUSD = document.getElementById('statTotalUSD');
   if (statTotalUSD) statTotalUSD.innerText = '$' + totalBaseUSD.toFixed(2);
 
@@ -387,143 +387,4 @@ window.processPdfFile = async function(file) {
       return;
     }
 
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
-    
-    let fullText = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      fullText += " " + textContent.items.map(item => item.str).join(' ');
-    }
-
-    const parsed = await parseBuyeeTextStream(fullText);
-    
-    if (parsed.length > 0) {
-      getCurrentProject().items = [...parsed, ...getCurrentProject().items];
-      updateCalculations();
-      alert(`Successfully imported and translated ${parsed.length} orders!`);
-    } else {
-      alert("PDF opened, but no orders matched the expected Buyee format.");
-    }
-  } catch (err) {
-    alert("Error reading PDF: " + err.message);
-  }
-};
-
-async function parseBuyeeTextStream(text) {
-  const items = [];
-  const currentTariff = getCurrentProject().tariffRate || 10;
-  const cleanText = text.replace(/Order\s*date([0-9])/gi, 'Order date $1');
-  const orderHeaderRegex = /([A-Z0-9]{10,14})\s*Order\s*date\s*(\d{1,2}\s+[A-Za-z]{3}\s+20\d{2})/gi;
-  const matches = [...cleanText.matchAll(orderHeaderRegex)];
-
-  if (matches.length === 0) return items;
-
-  for (let index = 0; index < matches.length; index++) {
-    const match = matches[index];
-    const orderId = match[1].trim();
-    const orderDate = match[2].trim();
-    const startIndex = match.index;
-    const endIndex = (index < matches.length - 1) ? matches[index + 1].index : cleanText.length;
-    const block = cleanText.slice(startIndex, endIndex);
-
-    if (block.includes('out of stock') || block.includes('Order was cancelled')) continue;
-
-    let seller = "Buyee Seller";
-    const sellerMatch = block.match(/(?:Shop Name|Seller)\s*([^\n\r]+?)(?=\s*(?:Total Amount|After your|Details|Purchase|Transaction|Quantity|Order date|$))/i);
-    if (sellerMatch && sellerMatch[1]) seller = sellerMatch[1].replace(/[-–—]\s*$/, '').trim();
-
-    let priceJPY = 0;
-    const jpyMatch = block.match(/(?:Requested Item Price|Item Price)\s*:?\s*([\d,]+)\s*YEN/i) || block.match(/Total Amount\s*:?\s*([\d,]+)\s*YEN/i);
-    if (jpyMatch) priceJPY = parseFloat(jpyMatch[1].replace(/,/g, '')) || 0;
-
-    let printedUSD = null;
-    const usdMatches = [...block.matchAll(/\(US\$\s*([\d,]+\.\d{2})\)/gi)];
-    if (usdMatches.length > 0) printedUSD = parseFloat(usdMatches[usdMatches.length - 1][1].replace(/,/g, ''));
-
-    let qty = 1;
-    const qtyMatch = block.match(/Quantity\s*(\d+|[lI])\s*item\(s\)/i);
-    if (qtyMatch) {
-      const rawQty = qtyMatch[1];
-      qty = (rawQty === 'l' || rawQty === 'I') ? 1 : (parseInt(rawQty, 10) || 1);
-    }
-
-    let rawTitle = "Proxy Purchase Item";
-    const qtyIdx = block.search(/Quantity\s*(\d+|[lI])\s*item\(s\)/i);
-    if (qtyIdx > 0) {
-      let snippet = block.slice(Math.max(0, qtyIdx - 160), qtyIdx).trim();
-      snippet = snippet.replace(/.*(?:Purchase request items|Transaction Delivery|Arrived at Warehouse|Shipped|Order Completed|Order Received|Details)\s*/gi, '').trim();
-      if (snippet.length > 0) rawTitle = snippet.slice(-120).replace(/^[\s•:-]+/, '').trim();
-    }
-
-    const EnglishTitle = await translateText(rawTitle);
-    const EnglishSeller = await translateText(seller);
-
-    if (priceJPY > 0) {
-      items.push({
-        id: String(Date.now() + index + Math.random()),
-        orderDate: orderDate,
-        orderId: orderId,
-        itemTitle: EnglishTitle,
-        seller: EnglishSeller,
-        qty: qty,
-        priceJPY: priceJPY,
-        printedUSD: printedUSD,
-        shippingUSD: 0,
-        feeUSD: 0,
-        tariffPercent: currentTariff,
-        selected: false
-      });
-    }
-  }
-
-  return items;
-}
-
-function exportToExcel() {
-  const items = getCurrentProject().items;
-  const exportData = items.map((item, idx) => ({
-    'Row #': idx + 1, 'Date': item.orderDate, 'Order ID': item.orderId,
-    'Item Title (EN)': item.itemTitle, 'Seller (EN)': item.seller, 'Qty': item.qty,
-    'Unit Price ($USD)': item.unitPriceUSD.toFixed(2), 'FX Rate': item.fxRate.toFixed(5),     'Base Cost ($ USD)': item.itemCostUSD.toFixed(2), 'Shipping ($USD)': item.shippingUSD.toFixed(2),     'Fees ($ USD)': item.feeUSD.toFixed(2), 'Tariff Rate (%)': item.tariffPercent + '%',
-    'Tariff ($USD)': item.tariffUSD.toFixed(2), 'Landed Cost ($ USD)': item.landedCostUSD.toFixed(2)
-  }));
-  const ws = XLSX.utils.json_to_sheet(exportData);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Inventory");
-  XLSX.writeFile(wb, `${getCurrentProject().name}_Report.xlsx`);
-}
-
-function exportBackupJSON() {
-  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(store, null, 2));
-  const dlAnchor = document.createElement('a');
-  dlAnchor.setAttribute("href", dataStr);
-  dlAnchor.setAttribute("download", `buyee_inventory_backup_${Date.now()}.json`);
-  document.body.appendChild(dlAnchor);
-  dlAnchor.click();
-  dlAnchor.remove();
-}
-
-function importBackupJSON(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      store = JSON.parse(e.target.result);
-      saveStoreToLocalStorage();
-      renderProjectDropdown();
-      loadProjectUI();
-      alert('Backup restored successfully!');
-    } catch (err) {
-      alert('Invalid JSON backup file.');
-    }
-  };
-  reader.readAsText(file);
-}
-
-function escapeHtml(s) { return (s||'').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '
