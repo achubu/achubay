@@ -1,8 +1,7 @@
 /**
- * Buyee Shipping Manifest & Landed Cost Parser Engine (Robust Version)
+ * Buyee Shipping Manifest & Landed Cost Parser Engine
  */
 
-// Configure PDF.js Worker safely for both local file:// and web servers
 if (typeof pdfjsLib !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
@@ -23,7 +22,6 @@ function setupEventListeners() {
   const pasteZone = document.getElementById('pasteZone');
   const parseTextBtn = document.getElementById('parseTextBtn');
 
-  // Tab Switching
   tabPdf.addEventListener('click', () => {
     dropZone.classList.remove('hidden');
     pasteZone.classList.add('hidden');
@@ -38,7 +36,6 @@ function setupEventListeners() {
     tabPdf.className = "text-xs font-semibold text-slate-400 hover:text-slate-200 pb-1";
   });
 
-  // File Selection
   dropZone.addEventListener('click', () => pdfFileInput.click());
 
   dropZone.addEventListener('dragover', (e) => {
@@ -68,7 +65,7 @@ function setupEventListeners() {
     const text = document.getElementById('rawTextArea').value;
     if (text.trim()) {
       parseManifestText(text, "Pasted_Manifest.txt");
-      showStatus("Parsed pasted text successfully!", false);
+      showStatus("Parsed text successfully!", false);
     } else {
       showStatus("Please paste text into the box first.", true);
     }
@@ -83,13 +80,11 @@ function setupEventListeners() {
 }
 
 async function handleFileUpload(file) {
-  showStatus(`Processing file: ${file.name}...`, false);
+  showStatus(`Reading file: ${file.name}...`, false);
 
   try {
     if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
       const arrayBuffer = await file.arrayBuffer();
-      
-      // Load PDF document safely
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
       const pdf = await loadingTask.promise;
       
@@ -98,22 +93,23 @@ async function handleFileUpload(file) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
-        // Extract items preserving spacing
+        // Extract text tokens while preserving newline spacing
         const pageStrings = textContent.items.map(item => item.str);
         fullText += pageStrings.join('\n') + '\n';
       }
       
+      document.getElementById('rawTextArea').value = fullText;
       parseManifestText(fullText, file.name);
-      showStatus(`Successfully parsed ${file.name} (${pdf.numPages} pages)`, false);
+      showStatus(`Successfully parsed ${file.name}`, false);
     } else {
-      // Direct text file
       const text = await file.text();
+      document.getElementById('rawTextArea').value = text;
       parseManifestText(text, file.name);
       showStatus(`Successfully parsed ${file.name}`, false);
     }
   } catch (err) {
-    console.error("PDF Parsing Error:", err);
-    showStatus(`Failed to parse PDF (${err.message}). Switch to 'Paste Raw Text' tab to paste contents directly.`, true);
+    console.error("PDF Reading Error:", err);
+    showStatus(`Error reading PDF: ${err.message}. Switch to 'Paste Raw Text' tab to inspect output.`, true);
   }
 }
 
@@ -123,46 +119,44 @@ function showStatus(msg, isError) {
 
   alertEl.classList.remove('hidden');
   msgEl.textContent = msg;
-
-  if (isError) {
-    alertEl.className = "p-3 rounded-lg text-xs flex items-center justify-between bg-red-950/80 border border-red-800 text-red-200";
-  } else {
-    alertEl.className = "p-3 rounded-lg text-xs flex items-center justify-between bg-emerald-950/80 border border-emerald-800 text-emerald-200";
-  }
+  alertEl.className = isError
+    ? "p-3 rounded-lg text-xs flex items-center justify-between bg-red-950/80 border border-red-800 text-red-200"
+    : "p-3 rounded-lg text-xs flex items-center justify-between bg-emerald-950/80 border border-emerald-800 text-emerald-200";
 }
 
 /**
- * Parser Engine for Buyee Manifest Format
+ * Robust Buyee Manifest Parser Logic
  */
 function parseManifestText(rawText, fileName) {
   const cleanText = rawText.replace(/\r/g, '');
 
-  const packageRef = extractRegex(cleanText, /Package Reference No\.\s*\n?\s*([A-Z0-9]+)/i, "N/A");
-  const delivDate = extractRegex(cleanText, /Date of Delivery\s*:?\s*(\d{4}[-\/]\d{2}[-\/]\d{2})/i, "N/A");
+  const packageRef = extractRegex(cleanText, /Package\s*Reference\s*No\.?\s*\n?\s*([A-Z0-9]+)/i, "N/A");
+  const delivDate = extractRegex(cleanText, /Date\s*of\s*Delivery\s*:?\s*(\d{4}[-\/]\d{2}[-\/]\d{2})/i, "N/A");
 
-  const intlShipping = extractNumber(cleanText, /International Shipping Fee\s*\n?\s*\|?\s*([\d,\.]+)/i);
-  const customsDuty = extractNumber(cleanText, /Customs Duty\s*\n?\s*\|?\s*\|?\s*([\d,\.]+)/i);
-  const buyeeFee = extractNumber(cleanText, /Buyee Service Fee\s*\n?\s*\|?\s*\|?\s*([\d,\.]+)/i);
-  const clearanceFee = extractNumber(cleanText, /Customs Clearance Fee\s*\n?\s*\|?\s*\|?\s*([\d,\.]+)/i);
+  const intlShipping = extractPriceNumber(cleanText, /International\s*Shipping\s*Fee[\s\S]*?([\d,\.]{3,})/i);
+  const customsDuty = extractPriceNumber(cleanText, /Customs\s*Duty[\s\S]*?([\d,\.]{3,})/i);
+  const buyeeFee = extractPriceNumber(cleanText, /Buyee\s*Service\s*Fee[\s\S]*?([\d,\.]{3,})/i);
+  const clearanceFee = extractPriceNumber(cleanText, /Customs\s*Clearance\s*Fee[\s\S]*?([\d,\.]{3,})/i);
   const otherFees = buyeeFee + clearanceFee;
 
-  const siteParts = cleanText.split(/Shopping Site\(ID\)/i);
+  // Flexible split on "Shopping Site (ID)" regardless of embedded line breaks
+  const siteParts = cleanText.split(/Shopping\s*Site\s*\(\s*ID\s*\)/i);
   const rawItems = [];
 
   for (let i = 1; i < siteParts.length; i++) {
-    const part = siteParts[i].split(/(?:Buyee Service Fee|Invoice Information|Shipping Expenses|Breakdown of Other)/i)[0];
+    // Strip trailing footer tables
+    const part = siteParts[i].split(/(?:Buyee\s*Service\s*Fee|Invoice\s*Information|Shipping\s*Expenses|Breakdown\s*of\s*Other)/i)[0];
 
-    // Order ID
-    const siteMatch = part.match(/\|\s*([^\(\n]+?)\s*\(([^)]+)\)/);
-    let siteName = "Buyee Site";
-    let orderId = "N/A";
-    if (siteMatch) {
-      siteName = siteMatch[1].trim();
-      orderId = siteMatch[2].replace(/[\s|]+/g, '').trim();
-    }
+    // Order ID: 8 to 15 alphanumeric chars in parentheses
+    const idMatch = part.match(/\(\s*([A-Z0-9]{8,15})[\s\vert{}]*\)/i);
+    const orderId = idMatch ? idMatch[1].trim() : "N/A";
 
-    // Item Name
-    const nameMatch = part.match(/Item Name\s*\n([\s\S]+?)(?=\n\s*(?:\||\s)*Quantity)/i);
+    // Site Name
+    const siteMatch = part.match(/\|\s*([^\(\n\r]+)/);
+    const siteName = siteMatch ? siteMatch[1].replace(/\n/g, ' ').trim() : "Buyee Site";
+
+    // Item Name: between Item Name and Quantity
+    const nameMatch = part.match(/Item\s*Name\s*\n([\s\S]+?)(?=\n\s*(?:\||\s)*Quantity)/i);
     let itemName = "Item";
     if (nameMatch) {
       const lines = nameMatch[1].split('\n')
@@ -171,21 +165,21 @@ function parseManifestText(rawText, fileName) {
       itemName = lines.join(' ');
     }
 
-    // Quantities & Prices
-    const qtyMatch = part.match(/Quantity\s*\n?[\s|]*(\d+)/i);
+    // Quantity
+    const qtyMatch = part.match(/Quantity[\s\S]*?(\d+)/i);
     const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
-    const origPrice = extractNumber(part, /Item Price\s*\n?[\s|]*([\d,\.]+)/i);
-    const coupon = extractNumber(part, /Coupon discount\s*\n?[\s|]*-?([\d,\.]+)/i);
-    let netPrice = origPrice - coupon;
+    // Prices
+    const origPrice = extractPriceNumber(part, /Item\s*Price[\s\S]*?([\d,\.]{3,})/i);
+    const coupon = extractPriceNumber(part, /Coupon\s*discount[\s\S]*?(-?[\d,\.]{3,})/i);
+    let netPrice = extractPriceNumber(part, /Total\s*Amount[\s\S]*?([\d,\.]{3,})/i);
 
-    const netMatch = part.match(/Total Amount\s*\n?[\s|]*([\d,\.]+)/i);
-    if (netMatch) {
-      const parsedNet = parsePriceString(netMatch[1]);
-      if (parsedNet > 0) netPrice = parsedNet;
+    if (netPrice === 0 && origPrice > 0) {
+      netPrice = origPrice - coupon;
     }
 
-    if (orderId !== "N/A" || netPrice > 0) {
+    // Only add valid items (filtering out summary/footer table splits)
+    if (orderId !== "N/A" && netPrice > 0) {
       rawItems.push({ orderId, siteName, itemName, qty, origPrice, coupon, netPrice });
     }
   }
@@ -225,15 +219,10 @@ function extractRegex(text, regex, defaultValue) {
   return match ? match[1].trim() : defaultValue;
 }
 
-function extractNumber(text, regex) {
+function extractPriceNumber(text, regex) {
   const match = text.match(regex);
   if (!match) return 0;
-  return parsePriceString(match[1]);
-}
-
-function parsePriceString(str) {
-  if (!str) return 0;
-  const clean = str.replace(/,/g, '').replace(/\./g, '');
+  const clean = match[1].replace(/[^\d]/g, '');
   const num = parseFloat(clean);
   return isNaN(num) ? 0 : num;
 }
@@ -246,70 +235,3 @@ function updateMetrics() {
   document.getElementById('metricNetCost').textContent = `¥${currentParsedData.totalNetItemsCost.toLocaleString()}`;
   document.getElementById('metricShipping').textContent = `¥${currentParsedData.intlShipping.toLocaleString()}`;
   document.getElementById('metricDuty').textContent = `¥${currentParsedData.customsDuty.toLocaleString()}`;
-  document.getElementById('metricGrandTotal').textContent = `¥${currentParsedData.grandTotalLanded.toLocaleString()}`;
-}
-
-function renderTable(filterQuery = '') {
-  const tbody = document.getElementById('manifestTableBody');
-  tbody.innerHTML = '';
-
-  if (!currentParsedData || currentParsedData.items.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-500">No items found in manifest.</td></tr>`;
-    return;
-  }
-
-  const filtered = currentParsedData.items.filter(item => {
-    return item.orderId.toLowerCase().includes(filterQuery) ||
-           item.itemName.toLowerCase().includes(filterQuery) ||
-           item.siteName.toLowerCase().includes(filterQuery);
-  });
-
-  filtered.forEach(item => {
-    const tr = document.createElement('tr');
-    tr.className = "hover:bg-slate-800/40 transition-colors";
-    tr.innerHTML = `
-      <td class="p-3 text-slate-200 font-semibold">${escapeHtml(item.orderId)}</td>
-      <td class="p-3 text-slate-400">${escapeHtml(item.siteName)}</td>
-      <td class="p-3 text-slate-100 max-w-xs truncate" title="${escapeHtml(item.itemName)}">${escapeHtml(item.itemName)}</td>
-      <td class="p-3 text-right text-slate-400">¥${item.origPrice.toLocaleString()}</td>
-      <td class="p-3 text-right text-emerald-400 font-medium">¥${item.netPrice.toLocaleString()}</td>
-      <td class="p-3 text-right text-blue-400">+¥${item.splitShipping.toLocaleString()}</td>
-      <td class="p-3 text-right text-amber-400">+¥${item.splitDuty.toLocaleString()}</td>
-      <td class="p-3 text-right text-slate-400">+¥${item.splitFees.toLocaleString()}</td>
-      <td class="p-3 text-right text-purple-300 font-bold bg-purple-950/20">¥${item.landedCost.toLocaleString()}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-
-  lucide.createIcons();
-}
-
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function exportToCSV() {
-  if (!currentParsedData) return;
-  const headers = ["Package Ref", "Date", "Order ID", "Site Name", "Item Name", "Qty", "Base Price", "Net Price", "Split Shipping", "Split Duty", "Split Fees", "Total Landed Cost"];
-  const rows = currentParsedData.items.map(i => [
-    currentParsedData.packageRef, currentParsedData.delivDate, `"${i.orderId}"`, `"${i.siteName}"`, `"${i.itemName.replace(/"/g, '""')}"`, i.qty, i.origPrice, i.netPrice, i.splitShipping, i.splitDuty, i.splitFees, i.landedCost
-  ]);
-  const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-  const link = document.createElement('a');
-  link.setAttribute('href', encodeURI(csvContent));
-  link.setAttribute('download', `Buyee_Landed_Cost_${currentParsedData.packageRef}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-function exportToJSON() {
-  if (!currentParsedData) return;
-  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentParsedData, null, 2));
-  const link = document.createElement('a');
-  link.setAttribute("href", dataStr);
-  link.setAttribute("download", `Buyee_Landed_Cost_${currentParsedData.packageRef}.json`);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
