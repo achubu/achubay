@@ -18,7 +18,6 @@ let store = {
       id: 'Default_Project',
       name: 'Default Project',
       tariffRate: 10.0,
-      fxMode: 'receipt',
       items: []
     }
   }
@@ -49,69 +48,47 @@ function updateStatus(msg, isError = false) {
   }
 }
 
-// Ultra-fast batch translation logic
-async function translateItemsInBatch(items) {
-  if (!items || items.length === 0) return;
+// CORS-compliant translation via MyMemory API
+async function fetchTranslation(text) {
+  if (!text || typeof text !== 'string') return text;
+  const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
+  if (!hasJapanese) return text;
 
-  const titles = items.map(i => i.itemTitle || '');
-  const sellers = items.map(i => i.seller || '');
-
-  const translatedTitles = await batchTranslateArray(titles);
-  const translatedSellers = await batchTranslateArray(sellers);
-
-  items.forEach((item, idx) => {
-    if (translatedTitles[idx]) item.itemTitle = translatedTitles[idx];
-    if (translatedSellers[idx]) item.seller = translatedSellers[idx];
-  });
-}
-
-async function batchTranslateArray(textArray) {
-  const results = [];
-  const delimiter = " ||| ";
-  let currentChunk = [];
-  let currentLen = 0;
-
-  for (let text of textArray) {
-    const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
-    if (!hasJapanese) {
-      results.push(text);
-      continue;
-    }
-
-    if (currentLen + text.length > 1200 && currentChunk.length > 0) {
-      const translatedChunk = await translateSingleChunk(currentChunk, delimiter);
-      results.push(...translatedChunk);
-      currentChunk = [text];
-      currentLen = text.length;
-    } else {
-      currentChunk.push(text);
-      currentLen += text.length;
-    }
-  }
-
-  if (currentChunk.length > 0) {
-    const translatedChunk = await translateSingleChunk(currentChunk, delimiter);
-    results.push(...translatedChunk);
-  }
-
-  return results;
-}
-
-async function translateSingleChunk(chunk, delimiter) {
-  const joined = chunk.join(delimiter);
   try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t&q=${encodeURIComponent(joined)}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data && data[0]) {
-      const fullStr = data[0].map(item => item[0]).join('');
-      const splitStr = fullStr.split(/\s*\|\|\|\s*/);
-      return chunk.map((orig, idx) => splitStr[idx] ? splitStr[idx].trim() : orig);
+    const cleanQuery = encodeURIComponent(text.trim());
+    const url = `https://api.mymemory.translated.net/get?q=${cleanQuery}&langpair=ja|en`;
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (data && data.responseData && data.responseData.translatedText) {
+      let result = data.responseData.translatedText;
+      // Filter out API quota error messages if rate limited
+      if (!result.includes("QUERY LENGTH LIMIT EXCEEDED") && !result.includes("MYMEMORY WARNING")) {
+        return result;
+      }
     }
   } catch (err) {
-    console.warn("Batch translate request failed:", err);
+    console.warn("Translation API error:", err);
   }
-  return chunk;
+  return text;
+}
+
+// Sequential item-by-item translation with live status progress
+async function translateItemList(items) {
+  if (!items || items.length === 0) return;
+
+  const total = items.length;
+  for (let i = 0; i < total; i++) {
+    updateStatus(`Translating item ${i + 1} of ${total}...`);
+    const item = items[i];
+    
+    if (item.itemTitle) {
+      item.itemTitle = await fetchTranslation(item.itemTitle);
+    }
+    if (item.seller && item.seller !== "Buyee Seller") {
+      item.seller = await fetchTranslation(item.seller);
+    }
+  }
 }
 
 window.translateAllExistingItems = async function() {
@@ -123,9 +100,8 @@ window.translateAllExistingItems = async function() {
   
   const button = document.getElementById('translateBtn');
   if (button) button.innerText = "Translating...";
-  updateStatus("Translating titles to English...");
 
-  await translateItemsInBatch(p.items);
+  await translateItemList(p.items);
 
   updateCalculations();
   if (button) button.innerText = "Translate Titles to English";
@@ -175,8 +151,7 @@ window.processPdfFile = async function(file) {
     const parsed = parseBuyeeTextStream(fullText);
     
     if (parsed.length > 0) {
-      updateStatus(`Translating ${parsed.length} item titles to English...`);
-      await translateItemsInBatch(parsed);
+      await translateItemList(parsed);
 
       getCurrentProject().items = [...parsed, ...getCurrentProject().items];
       updateCalculations();
@@ -265,7 +240,6 @@ window.applyGlobalChangesToAllRows = function() {
 
   const tariffVal = parseFloat(document.getElementById('globalTariffInput')?.value) || 0;
   p.tariffRate = tariffVal;
-  p.fxMode = document.getElementById('fxMode')?.value || 'receipt';
 
   p.items.forEach(item => {
     item.tariffPercent = tariffVal;
@@ -278,9 +252,6 @@ window.applyGlobalChangesToAllRows = function() {
 function setupGlobalInputs() {
   const tariffInput = document.getElementById('globalTariffInput');
   if (tariffInput) tariffInput.addEventListener('input', updateCalculations);
-
-  const fxSelect = document.getElementById('fxMode');
-  if (fxSelect) fxSelect.addEventListener('change', updateCalculations);
 }
 
 function setupDropZone() {
@@ -336,7 +307,6 @@ function renderProjectDropdown() {
 function loadProjectUI() {
   const p = getCurrentProject();
   if (document.getElementById('globalTariffInput')) document.getElementById('globalTariffInput').value = p.tariffRate;
-  if (document.getElementById('fxMode')) document.getElementById('fxMode').value = p.fxMode;
   updateCalculations();
 }
 
@@ -351,7 +321,7 @@ function createNewProjectPrompt() {
   if (name && name.trim()) {
     const id = 'proj_' + Date.now();
     store.projects[id] = {
-      id, name: name.trim(), tariffRate: 10.0, fxMode: 'receipt', items: []
+      id, name: name.trim(), tariffRate: 10.0, items: []
     };
     store.activeProjectId = id;
     saveStoreToLocalStorage();
@@ -375,9 +345,11 @@ function deleteCurrentProject() {
   }
 }
 
-function getFxRate(item, fxMode) {
-  if (fxMode === 'fixed') return 1 / 150;
-  if (fxMode === 'receipt' && item.printedUSD && item.priceJPY > 0) return item.printedUSD / item.priceJPY;
+// Automatic FX calculation directly from printed receipt USD figure or historical lookup
+function getFxRate(item) {
+  if (item.printedUSD && item.priceJPY > 0) {
+    return item.printedUSD / item.priceJPY;
+  }
   if (item.orderDate) {
     const parts = item.orderDate.split(' ');
     if (parts.length >= 3) {
@@ -392,13 +364,12 @@ function getFxRate(item, fxMode) {
 function updateCalculations() {
   const p = getCurrentProject();
   if (document.getElementById('globalTariffInput')) p.tariffRate = parseFloat(document.getElementById('globalTariffInput').value) || 0;
-  if (document.getElementById('fxMode')) p.fxMode = document.getElementById('fxMode').value;
 
   const items = p.items;
 
   let totalBaseUSD = 0, totalTariffUSD = 0, totalLandedUSD = 0;
   items.forEach(item => {
-    item.fxRate = getFxRate(item, p.fxMode);
+    item.fxRate = getFxRate(item);
     item.unitPriceUSD = item.priceJPY * item.fxRate;
     item.itemCostUSD = item.unitPriceUSD * (item.qty || 1);
 
@@ -454,7 +425,6 @@ function renderTable() {
       <td class="p-3 text-slate-300 truncate max-w-[120px]">${escapeHtml(item.seller)}</td>
       <td class="p-3 text-right"><input type="number" value="${item.qty}" min="1" onchange="updateItemValue('${item.id}', 'qty', parseInt(this.value)||1)" class="w-12 bg-slate-900 text-right px-1 text-xs rounded"></td>
       <td class="p-3 text-right font-mono text-amber-300">$${(item.unitPriceUSD || 0).toFixed(2)}</td>
-      <td class="p-3 text-right font-mono text-slate-400 text-[11px]">$${item.fxRate.toFixed(5)}</td>
       <td class="p-3 text-right font-mono font-semibold text-sky-300">$${item.itemCostUSD.toFixed(2)}</td>
       <td class="p-3 text-right"><input type="number" step="0.1" value="${item.tariffPercent}" onchange="updateItemValue('${item.id}', 'tariffPercent', parseFloat(this.value)||0)" class="w-14 bg-slate-900 text-right px-1 text-xs text-rose-300 rounded"></td>
       <td class="p-3 text-right font-mono text-rose-400">$${item.tariffUSD.toFixed(2)}</td>
@@ -493,7 +463,7 @@ function exportToExcel() {
   const exportData = items.map((item, idx) => ({
     'Row #': idx + 1, 'Date': item.orderDate, 'Order ID': item.orderId,
     'Item Title': item.itemTitle, 'Seller': item.seller, 'Qty': item.qty,
-    'Unit Price ($USD)': item.unitPriceUSD.toFixed(2), 'FX Rate': item.fxRate.toFixed(5),     'Base Cost ($ USD)': item.itemCostUSD.toFixed(2), 'Tariff Rate (%)': item.tariffPercent + '%',
+    'Unit Price ($USD)': item.unitPriceUSD.toFixed(2),     'Base Cost ($ USD)': item.itemCostUSD.toFixed(2), 'Tariff Rate (%)': item.tariffPercent + '%',
     'Tariff ($USD)': item.tariffUSD.toFixed(2), 'Landed Cost ($ USD)': item.landedCostUSD.toFixed(2)
   }));
   const ws = XLSX.utils.json_to_sheet(exportData);
