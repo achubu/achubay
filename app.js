@@ -23,6 +23,10 @@ let store = {
   }
 };
 
+if (typeof pdfjsLib !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   loadStoreFromLocalStorage();
   safeCreateIcons();
@@ -46,6 +50,73 @@ function updateStatus(msg, isError = false) {
       ? "text-[11px] font-mono text-rose-300 mt-3 bg-rose-950/80 px-3 py-1 rounded border border-rose-800/50"
       : "text-[11px] font-mono text-indigo-300 mt-3 bg-slate-900/80 px-3 py-1 rounded border border-indigo-900/50";
   }
+}
+
+function sanitizeStore(rawStore) {
+  if (!rawStore || typeof rawStore !== 'object') {
+    return {
+      activeProjectId: 'Default_Project',
+      projects: {
+        'Default_Project': { id: 'Default_Project', name: 'Default Project', tariffRate: 12.566, items: [] }
+      }
+    };
+  }
+  if (!rawStore.projects || typeof rawStore.projects !== 'object') {
+    rawStore.projects = {
+      'Default_Project': { id: 'Default_Project', name: 'Default Project', tariffRate: 12.566, items: [] }
+    };
+  }
+  if (!rawStore.activeProjectId || !rawStore.projects[rawStore.activeProjectId]) {
+    rawStore.activeProjectId = Object.keys(rawStore.projects)[0] || 'Default_Project';
+  }
+  Object.values(rawStore.projects).forEach(p => {
+    if (typeof p.tariffRate !== 'number') p.tariffRate = 12.566;
+    if (!Array.isArray(p.items)) p.items = [];
+    p.items.forEach(item => {
+      if (typeof item.qty !== 'number') item.qty = parseInt(item.qty, 10) || 1;
+      if (typeof item.priceJPY !== 'number') item.priceJPY = parseFloat(item.priceJPY) || 0;
+      if (typeof item.printedUSD !== 'number' && item.printedUSD !== null) item.printedUSD = parseFloat(item.printedUSD) || null;
+      if (typeof item.shippingUSD !== 'number') item.shippingUSD = parseFloat(item.shippingUSD) || 0;
+      if (typeof item.tariffPercent !== 'number') item.tariffPercent = p.tariffRate;
+      if (typeof item.selected !== 'boolean') item.selected = false;
+      if (!item.itemTitle) item.itemTitle = 'Proxy Purchase Item';
+      if (!item.seller) item.seller = 'Buyee Seller';
+      if (!item.orderId) item.orderId = 'N/A';
+      if (!item.orderDate) item.orderDate = 'N/A';
+    });
+  });
+  return rawStore;
+}
+
+function loadStoreFromLocalStorage() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      store = sanitizeStore(parsed);
+    } else {
+      store = sanitizeStore(null);
+    }
+  } catch (e) {
+    console.error('Failed to parse saved state:', e);
+    store = sanitizeStore(null);
+  }
+}
+
+function saveStoreToLocalStorage() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  } catch (e) {
+    console.error('Failed to save to local storage:', e);
+  }
+}
+
+function getCurrentProject() {
+  if (!store || !store.projects) store = sanitizeStore(null);
+  if (!store.projects[store.activeProjectId]) {
+    store.activeProjectId = Object.keys(store.projects)[0] || 'Default_Project';
+  }
+  return store.projects[store.activeProjectId];
 }
 
 async function fetchTranslation(text) {
@@ -128,7 +199,9 @@ window.processPdfFile = async function(file) {
       return;
     }
 
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    if (pdfjsLib.GlobalWorkerOptions) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
 
     updateStatus("Opening PDF file...");
     const arrayBuffer = await file.arrayBuffer();
@@ -154,7 +227,7 @@ window.processPdfFile = async function(file) {
       if (result.success) {
         updateCalculations();
         updateStatus(`Allocated ${result.shippingJPY} JPY shipping across ${result.matchedCount} items!`);
-        alert(`Success! Allocated ${result.shippingJPY} JPY International Shipping Fee across ${result.matchedCount} matching items.`);
+        alert(`Success! Allocated ${result.shippingJPY} JPY International Shipping Fee across ${result.matchedCount} items.`);
       } else {
         updateStatus(result.message, true);
         alert(result.message);
@@ -200,66 +273,42 @@ function parseBuyeeShippingPdf(text, project) {
     };
   }
 
-  // Extract extracted IDs and product codes (Mercari M-IDs, Fleamarket IDs, card codes)
-  const extractedKeywords = [];
-  
-  // Site IDs e.g. M26092602488, 126100101969, 126100102149
-  const rawIdMatches = text.match(/([A-Z0-9]{10,14})/gi) || [];
-  rawIdMatches.forEach(id => extractedKeywords.push(id.trim().toUpperCase()));
-
-  // Model & Set codes e.g. LOB-005, BLC-4-027, EX15BT
-  const codeMatches = text.match(/([A-Z0-9]+-[A-Z0-9-]+)/gi) || [];
-  codeMatches.forEach(c => extractedKeywords.push(c.trim().toUpperCase()));
-
-  const uniquePdfKeywords = [...new Set(extractedKeywords)];
-  const textUpper = text.toUpperCase();
-
-  // Multi-layer matching against active project items
-  let matchedItems = project.items.filter(item => {
-    const itemOrderId = (item.orderId || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    const itemTitle = (item.itemTitle || '').toUpperCase();
-    const itemSeller = (item.seller || '').toUpperCase();
-
-    // 1. Order ID or Site ID match
-    if (itemOrderId && uniquePdfKeywords.some(kw => itemOrderId.includes(kw) || kw.includes(itemOrderId))) {
-      return true;
-    }
-
-    // 2. Keyword/Model Code in Title (e.g., LOB-005, BLC-4-027, BLEACH, Dark Magician)
-    for (let kw of uniquePdfKeywords) {
-      if (kw.length >= 4 && (itemTitle.includes(kw) || itemSeller.includes(kw))) {
-        return true;
-      }
-    }
-
-    // 3. Fallback fuzzy title token matching
-    if (itemTitle.includes('LOB-005') || itemTitle.includes('BLC-4-027') || itemTitle.includes('BLEACH') || itemTitle.includes('MAGICIAN') || itemTitle.includes('MIKASA')) {
-      if (textUpper.includes('LOB-005') || textUpper.includes('BLC-4-027') || textUpper.includes('BLEACH') || textUpper.includes('M26092602488') || textUpper.includes('126100101969') || textUpper.includes('126100102149')) {
-        return true;
-      }
-    }
-
-    return false;
-  });
-
-  // Fallback: If strict matching returned nothing, allocate across all project items or unshipped items
-  if (matchedItems.length === 0) {
-    const unshipped = project.items.filter(i => !i.shippingUSD || i.shippingUSD === 0);
-    matchedItems = unshipped.length > 0 ? unshipped : project.items;
-  }
-
-  if (matchedItems.length === 0) {
+  const items = project.items || [];
+  if (items.length === 0) {
     return { 
       success: false, 
       message: "No items found in active project to apply shipping to. Please import your Order receipts first!" 
     };
   }
 
-  // Spreading International Shipping Fee proportionally by JPY price
+  // Extract Mercari/Fleamarket IDs & Model Codes from PDF
+  const siteIds = (text.match(/(M\d{10,12}|\b126\d{9,11}\b|\bW26\d{8,10}\b)/gi) || []).map(x => x.toUpperCase());
+  const itemCodes = (text.match(/([A-Z0-9]{3,8}-[A-Z0-9-]+)/gi) || []).map(x => x.toUpperCase()).filter(c => !c.includes('2026') && !c.includes('VALUE'));
+
+  // Match items in project list
+  let matchedItems = items.filter(item => {
+    const orderId = (item.orderId || '').toUpperCase();
+    const title = (item.itemTitle || '').toUpperCase();
+
+    // Direct match on Site ID or Order ID
+    if (orderId && siteIds.some(id => orderId.includes(id) || id.includes(orderId))) return true;
+
+    // Model code match (e.g., LOB-005, BLC-4-027)
+    if (itemCodes.some(code => title.includes(code))) return true;
+
+    return false;
+  });
+
+  // Fallback: If specific ID/code matching produced no hits, allocate across ALL items in project
+  if (matchedItems.length === 0) {
+    matchedItems = items;
+  }
+
+  // Calculate proportional share strictly for International Shipping Fee by JPY item price
   const totalMatchedJPY = matchedItems.reduce((sum, i) => sum + (i.priceJPY || 0), 0);
 
   matchedItems.forEach(item => {
-    const ratio = totalMatchedJPY > 0 ? (item.priceJPY / totalMatchedJPY) : (1 / matchedItems.length);
+    const ratio = totalMatchedJPY > 0 ? ((item.priceJPY || 0) / totalMatchedJPY) : (1 / matchedItems.length);
     const itemShippingJPY = intlShippingJPY * ratio;
     item.shippingUSD = itemShippingJPY * (item.fxRate || 0.0064);
   });
@@ -361,4 +410,247 @@ function setupGlobalInputs() {
 
 function setupDropZone() {
   const dropZone = document.getElementById('dropZone');
-  if (!dropZone) return
+  if (!dropZone) return;
+
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    dropZone.addEventListener(eventName, (e) => { e.preventDefault(); e.stopPropagation(); }, false);
+  });
+
+  ['dragenter', 'dragover'].forEach(eventName => {
+    dropZone.addEventListener(eventName, () => dropZone.classList.add('border-indigo-500', 'bg-slate-700/60'), false);
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    dropZone.addEventListener(eventName, () => dropZone.classList.remove('border-indigo-500', 'bg-slate-700/60'), false);
+  });
+
+  dropZone.addEventListener('drop', (e) => {
+    const dt = e.dataTransfer;
+    if (dt && dt.files && dt.files.length > 0) {
+      window.processPdfFile(dt.files[0]);
+    }
+  }, false);
+}
+
+function renderProjectDropdown() {
+  const select = document.getElementById('projectSelect');
+  if (!select) return;
+  select.innerHTML = Object.values(store.projects).map(p => 
+    `<option value="${p.id}" ${p.id === store.activeProjectId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
+  ).join('');
+}
+
+function loadProjectUI() {
+  const p = getCurrentProject();
+  if (document.getElementById('globalTariffInput')) document.getElementById('globalTariffInput').value = p.tariffRate;
+  updateCalculations();
+}
+
+function switchProject(id) {
+  store.activeProjectId = id;
+  saveStoreToLocalStorage();
+  loadProjectUI();
+}
+
+function createNewProjectPrompt() {
+  const name = prompt("Enter new project name:");
+  if (name && name.trim()) {
+    const id = 'proj_' + Date.now();
+    store.projects[id] = {
+      id, name: name.trim(), tariffRate: 12.566, items: []
+    };
+    store.activeProjectId = id;
+    saveStoreToLocalStorage();
+    renderProjectDropdown();
+    loadProjectUI();
+  }
+}
+
+function deleteCurrentProject() {
+  const keys = Object.keys(store.projects);
+  if (keys.length <= 1) {
+    alert("Cannot delete the only remaining project.");
+    return;
+  }
+  if (confirm(`Delete project "${getCurrentProject().name}"?`)) {
+    delete store.projects[store.activeProjectId];
+    store.activeProjectId = Object.keys(store.projects)[0];
+    saveStoreToLocalStorage();
+    renderProjectDropdown();
+    loadProjectUI();
+  }
+}
+
+function getFxRate(item) {
+  if (item.printedUSD && item.priceJPY > 0) {
+    return item.printedUSD / item.priceJPY;
+  }
+  if (item.orderDate) {
+    const parts = item.orderDate.split(' ');
+    if (parts.length >= 3) {
+      const monthMap = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06', Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
+      const key = `${parts[2]}-${monthMap[parts[1]] || '10'}`;
+      if (historicalFxTable[key]) return historicalFxTable[key];
+    }
+  }
+  return 0.0064;
+}
+
+function updateCalculations() {
+  const p = getCurrentProject();
+  if (document.getElementById('globalTariffInput')) p.tariffRate = parseFloat(document.getElementById('globalTariffInput').value) || 0;
+
+  const items = p.items || [];
+
+  let totalBaseUSD = 0, totalShippingUSD = 0, totalTariffUSD = 0, totalLandedUSD = 0;
+  items.forEach(item => {
+    item.fxRate = getFxRate(item);
+    item.unitPriceUSD = (item.priceJPY || 0) * item.fxRate;
+    item.itemCostUSD = item.unitPriceUSD * (item.qty || 1);
+    item.shippingUSD = typeof item.shippingUSD === 'number' ? item.shippingUSD : 0.00;
+
+    if (typeof item.tariffPercent !== 'number') item.tariffPercent = p.tariffRate;
+    item.tariffUSD = item.itemCostUSD * (item.tariffPercent / 100);
+    item.landedCostUSD = item.itemCostUSD + item.shippingUSD + item.tariffUSD;
+
+    totalBaseUSD += item.itemCostUSD;
+    totalShippingUSD += item.shippingUSD;
+    totalTariffUSD += item.tariffUSD;
+    totalLandedUSD += item.landedCostUSD;
+  });
+
+  const statCount = document.getElementById('statCount');
+  if (statCount) statCount.innerText = items.length;
+
+  const statTotalUSD = document.getElementById('statTotalUSD');
+  if (statTotalUSD) statTotalUSD.innerText = '$' + totalBaseUSD.toFixed(2);
+
+  const statTotalShipping = document.getElementById('statTotalShipping');
+  if (statTotalShipping) statTotalShipping.innerText = '$' + totalShippingUSD.toFixed(2);
+
+  const statTariff = document.getElementById('statTotalTariff');
+  if (statTariff) statTariff.innerText = '$' + totalTariffUSD.toFixed(2);
+
+  const statLanded = document.getElementById('statTotalLanded');
+  if (statLanded) statLanded.innerText = '$' + totalLandedUSD.toFixed(2);
+
+  saveStoreToLocalStorage();
+  renderTable();
+}
+
+function renderTable() {
+  const p = getCurrentProject();
+  const tbody = document.getElementById('inventoryTbody');
+  if (!tbody) return;
+  const q = (document.getElementById('searchInput')?.value || '').toLowerCase();
+  tbody.innerHTML = '';
+
+  const items = p.items || [];
+  const filtered = items.filter(i => 
+    (i.itemTitle||'').toLowerCase().includes(q) || (i.seller||'').toLowerCase().includes(q) || (i.orderId||'').toLowerCase().includes(q)
+  );
+
+  const countDisplay = document.getElementById('displayedCountText');
+  if (countDisplay) countDisplay.innerText = `Showing ${filtered.length} of ${items.length} items`;
+
+  filtered.forEach((item) => {
+    const tr = document.createElement('tr');
+    tr.className = "hover:bg-slate-700/40 border-b border-slate-700/50";
+
+    const unitPrice = typeof item.unitPriceUSD === 'number' ? item.unitPriceUSD : 0;
+    const itemCost = typeof item.itemCostUSD === 'number' ? item.itemCostUSD : 0;
+    const shipping = typeof item.shippingUSD === 'number' ? item.shippingUSD : 0;
+    const tariffPct = typeof item.tariffPercent === 'number' ? item.tariffPercent : (p.tariffRate || 12.566);
+    const tariffVal = typeof item.tariffUSD === 'number' ? item.tariffUSD : 0;
+    const landedCost = typeof item.landedCostUSD === 'number' ? item.landedCostUSD : 0;
+
+    tr.innerHTML = `
+      <td class="p-3 text-center"><input type="checkbox" ${item.selected ? 'checked' : ''} onchange="toggleRowSelect('${item.id}')"></td>
+      <td class="p-3 text-slate-300 font-mono text-[11px]">${escapeHtml(item.orderDate || 'N/A')}</td>
+      <td class="p-3 text-slate-400 font-mono text-[11px]">${escapeHtml(item.orderId || 'N/A')}</td>
+      <td class="p-3 font-medium text-slate-100">
+        <input type="text" value="${escapeHtml(item.itemTitle)}" onchange="updateItemValue('${item.id}', 'itemTitle', this.value)" class="bg-transparent border-none w-full text-xs text-slate-100 focus:bg-slate-900 rounded px-1">
+      </td>
+      <td class="p-3 text-slate-300 truncate max-w-[120px]">${escapeHtml(item.seller)}</td>
+      <td class="p-3 text-right"><input type="number" value="${item.qty || 1}" min="1" onchange="updateItemValue('${item.id}', 'qty', parseInt(this.value)||1)" class="w-12 bg-slate-900 text-right px-1 text-xs rounded"></td>
+      <td class="p-3 text-right font-mono text-amber-300">$${unitPrice.toFixed(2)}</td>
+      <td class="p-3 text-right font-mono font-semibold text-sky-300">$${itemCost.toFixed(2)}</td>
+      <td class="p-3 text-right"><input type="number" step="0.01" value="${shipping.toFixed(2)}" onchange="updateItemValue('${item.id}', 'shippingUSD', parseFloat(this.value)||0)" class="w-16 bg-slate-900 text-right px-1 text-xs text-amber-300 rounded"></td>
+      <td class="p-3 text-right"><input type="number" step="0.001" value="${tariffPct}" onchange="updateItemValue('${item.id}', 'tariffPercent', parseFloat(this.value)||0)" class="w-16 bg-slate-900 text-right px-1 text-xs text-rose-300 rounded"></td>
+      <td class="p-3 text-right font-mono text-rose-400">$${tariffVal.toFixed(2)}</td>
+      <td class="p-3 text-right font-mono font-bold text-emerald-400">$${landedCost.toFixed(2)}</td>
+      <td class="p-3 text-center"><button onclick="deleteSingleRow('${item.id}')" class="text-slate-400 hover:text-rose-400"><i data-lucide="x" class="w-4 h-4"></i></button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  safeCreateIcons();
+}
+
+function updateItemValue(id, key, val) {
+  const item = getCurrentProject().items.find(i => String(i.id) === String(id));
+  if (item) { item[key] = val; updateCalculations(); }
+}
+
+function addNewRow() {
+  const p = getCurrentProject();
+  p.items.unshift({
+    id: String(Date.now() + Math.random()),
+    orderDate: '7 Oct 2026', orderId: `ORD-${Math.floor(Math.random()*90000)}`,
+    itemTitle: 'New Item Description', seller: 'Mercari Seller', qty: 1, priceJPY: 10000,
+    shippingUSD: 0.00, tariffPercent: p.tariffRate, selected: false
+  });
+  updateCalculations();
+}
+
+function toggleRowSelect(id) { const i = getCurrentProject().items.find(x => String(x.id) === String(id)); if(i) i.selected = !i.selected; }
+function toggleSelectAll(chk) { getCurrentProject().items.forEach(i => i.selected = chk.checked); renderTable(); }
+function deleteSingleRow(id) { getCurrentProject().items = getCurrentProject().items.filter(i => String(i.id) !== String(id)); updateCalculations(); }
+function deleteSelectedRows() { getCurrentProject().items = getCurrentProject().items.filter(i => !i.selected); updateCalculations(); }
+function clearAllItems() { if(confirm('Clear all items in active project?')) { getCurrentProject().items = []; updateCalculations(); } }
+
+function exportToExcel() {
+  const items = getCurrentProject().items || [];
+  const exportData = items.map((item, idx) => ({
+    'Row #': idx + 1, 'Date': item.orderDate, 'Order ID': item.orderId,
+    'Item Title': item.itemTitle, 'Seller': item.seller, 'Qty': item.qty,
+    'Unit Price ($ USD)': (item.unitPriceUSD || 0).toFixed(2),
+    'Base Cost ($USD)': (item.itemCostUSD \vert{}\vert{} 0).toFixed(2),     'Shipping ($ USD)': (item.shippingUSD || 0).toFixed(2),
+    'Tariff Rate (%)': (item.tariffPercent || 12.566) + '%',
+    'Tariff ($USD)': (item.tariffUSD \vert{}\vert{} 0).toFixed(2),     'Landed Cost ($ USD)': (item.landedCostUSD || 0).toFixed(2)
+  }));
+  const ws = XLSX.utils.json_to_sheet(exportData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Inventory");
+  XLSX.writeFile(wb, `${getCurrentProject().name}_Report.xlsx`);
+}
+
+function exportBackupJSON() {
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(store, null, 2));
+  const dlAnchor = document.createElement('a');
+  dlAnchor.setAttribute("href", dataStr);
+  dlAnchor.setAttribute("download", `buyee_inventory_backup_${Date.now()}.json`);
+  document.body.appendChild(dlAnchor);
+  dlAnchor.click();
+  dlAnchor.remove();
+}
+
+function importBackupJSON(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const parsed = JSON.parse(e.target.result);
+      store = sanitizeStore(parsed);
+      saveStoreToLocalStorage();
+      renderProjectDropdown();
+      loadProjectUI();
+      alert('Backup restored successfully!');
+    } catch (err) {
+      alert('Invalid JSON backup file.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function escapeHtml(s) { return (s||'').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
