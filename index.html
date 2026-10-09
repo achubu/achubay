@@ -56,9 +56,13 @@ h1{font-family:var(--serif);font-weight:700;font-size:clamp(28px,4.4vw,44px);lin
 .msg.err{border-left:3px solid var(--duty)}
 
 .sheet{background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:24px;margin-top:20px}
-.meta{display:flex;flex-wrap:wrap;gap:8px 28px;margin:0;font-size:14px}
-.meta div{display:flex;gap:6px}
-.meta dt{color:var(--muted)} .meta dd{margin:0;font-weight:500}
+.pkgs td,.pkgs th{padding:8px 10px}
+.linkbtn{font:inherit;font-size:13px;background:none;border:0;color:var(--muted);text-decoration:underline;cursor:pointer;padding:2px 4px}
+.linkbtn:hover{color:var(--duty)}
+tr.grp td{background:var(--soft);font-weight:700;font-size:13px;padding:8px 10px;text-align:left}
+tr.grp td:first-child{padding-left:10px}
+tr.grp .gsum{float:right;font-variant-numeric:tabular-nums}
+tr.grp .gmeta{font-weight:400;color:var(--muted);margin-left:8px}
 
 .totals{display:grid;grid-template-columns:minmax(220px,1fr) 2fr;gap:24px 40px;align-items:start}
 .grand .label{color:var(--muted);font-size:14px}
@@ -150,15 +154,19 @@ textarea.copybox{width:100%;height:140px;font:12px/1.4 ui-monospace,Menlo,monosp
   </header>
 
   <label class="drop" id="drop" tabindex="0">
-    <input id="file" type="file" accept="application/pdf,.pdf">
-    <strong id="dropTitle">Choose or drop a manifest PDF</strong>
-    <span id="dropHint">Works with Buyee “Breakdown of Expenses” files. Everything is read in your browser; nothing is uploaded.</span>
+    <input id="file" type="file" accept="application/pdf,.pdf" multiple>
+    <strong id="dropTitle">Choose or drop manifest PDFs</strong>
+    <span id="dropHint">Add one or several Buyee “Breakdown of Expenses” files and they’ll be combined. Everything is read in your browser; nothing is uploaded.</span>
   </label>
   <div id="msg" class="msg hidden" role="status"></div>
 
   <div id="out" class="hidden">
     <section class="sheet">
-      <dl class="meta" id="meta"></dl>
+      <div class="h2row">
+        <div><h2 id="pkgTitle">Packages</h2><p>Added manifests are remembered in this browser until you remove them.</p></div>
+        <button class="btn" id="clearAll" type="button">Remove all</button>
+      </div>
+      <div class="scroll"><table class="pkgs" id="meta"></table></div>
     </section>
 
     <section class="sheet totals" aria-label="Totals">
@@ -376,8 +384,7 @@ const store = {
   set(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
 };
 
-let data = null, split = "value", mode = store.get("buyee.mode") === "one" ? "one" : "date";
-let cardUsd = {};          // payment index -> USD the card was charged
+let manifests = [], split = "value", mode = store.get("buyee.mode") === "one" ? "one" : "date";
 const fetched = {};        // date -> rate fetched online (downloaded copy only)
 const savedRate = parseFloat(store.get("buyee.rate"));
 if (savedRate > 0) $("rate").value = savedRate;
@@ -417,8 +424,8 @@ function matchPayments(d){
   return { pays, itemPay, box };
 }
 
-function payRate(p){
-  const usd = cardUsd[p.i];
+function payRate(p, d){
+  const usd = (d.cardUsd || {})[p.i];
   if (usd > 0) return { rate: p.amount / usd, src: "your card" };
   if (mode === "one") return { rate: oneRate(), src: "your rate" };
   const t = tableRate(p.iso);
@@ -450,7 +457,8 @@ function getSample(){
   return sampleP;
 }
 async function translateItems(){
-  const todo = [...new Set(data.items.map(i=>i.name).filter(n => hasJa(n) && !tr[n]))];
+  if (!manifests.length) return;
+  const todo = [...new Set(manifests.flatMap(d=>d.items).map(i=>i.name).filter(n => hasJa(n) && !tr[n]))];
   const st = $("trStatus");
   if (!todo.length){ st.classList.add("hidden"); return; }
   const sample = await getSample();
@@ -506,8 +514,7 @@ function allocate(total, weights){
   return base;
 }
 
-function compute(){
-  const d = data;
+function compute(d){
   const rows = d.items.map(it => {
     const coupon = it.adjustments.filter(a=>/coupon|discount|point/i.test(a.label)).reduce((a,b)=>a+b.amount,0);
     const otherAdj = it.adjustments.filter(a=>!/coupon|discount|point/i.test(a.label)).reduce((a,b)=>a+b.amount,0);
@@ -533,7 +540,7 @@ function compute(){
 
   // exchange rates
   const m = matchPayments(d);
-  m.pays.forEach(p => Object.assign(p, payRate(p)));
+  m.pays.forEach(p => Object.assign(p, payRate(p, d)));
   const fallback = mode === "one" ? { rate: oneRate(), src: "your rate" } :
     (tableRate(isoOf(d.date)) ? { rate: tableRate(isoOf(d.date)), src: "market rate on delivery date" } : { rate: oneRate(), src: "your rate" });
   let boxRate = fallback.rate, boxSrc = fallback.src, boxDate = d.date;
@@ -550,51 +557,70 @@ function compute(){
     r.u = { gross: r.gross/ir, coupon: r.coupon/ir, net: r.net/ir, fee: r.fee/ir, ship: r.ship/br, duty: r.duty/br };
     r.u.landed = r.u.net + r.u.fee + r.u.ship + r.u.duty;
   });
-  return { rows, unassigned, m, boxRate, boxSrc, boxDate };
+  return { d, rows, unassigned, m, boxRate, boxSrc, boxDate };
 }
 
 /* ---------------- render ---------------- */
 function render(){
-  if (!data) return;
-  const { rows, unassigned, m, boxRate, boxSrc, boxDate } = compute();
+  const has = manifests.length > 0;
+  $("out").classList.toggle("hidden", !has);
+  $("drop").classList.toggle("compact", has);
+  $("dropTitle").textContent = has ? `${manifests.length} manifest${manifests.length>1?"s":""} added` : "Choose or drop manifest PDFs";
+  $("dropHint").textContent = has ? "Add more manifests" : "Add one or several Buyee “Breakdown of Expenses” files and they’ll be combined. Everything is read in your browser; nothing is uploaded.";
+  $("oneRateField").classList.toggle("hidden", mode !== "one");
+  document.querySelectorAll("[data-mode]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.mode===mode)));
+  if (!has){ window.__tsv = ""; return; }
+
+  const R = manifests.map(compute);
+  const rows = R.flatMap(x => x.rows);
   const keys = ["gross","coupon","net","fee","ship","duty","landed"];
   const T = {}, TY = {};
   keys.forEach(k => { T[k] = cents(rows.reduce((a,r)=>a+r.u[k],0)); TY[k] = rows.reduce((a,r)=>a+r[k],0); });
+  const sub = x => ({ usd: cents(x.rows.reduce((a,r)=>a+r.u.landed,0)), yen: x.rows.reduce((a,r)=>a+r.landed,0) });
+  const okOf = x => { const d = x.d, y = sub(x).yen, pt = d.payments.reduce((a,p)=>a+p.amount,0);
+    return d.grandTotal == null ? null : (y === d.grandTotal && (!d.payments.length || pt === d.grandTotal)); };
 
-  $("oneRateField").classList.toggle("hidden", mode !== "one");
-  document.querySelectorAll("[data-mode]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.mode===mode)));
+  // packages
+  $("pkgTitle").textContent = manifests.length > 1 ? `${manifests.length} packages` : "Package";
+  $("meta").innerHTML = `<thead><tr><th scope="col">Package</th><th scope="col">Delivered</th><th scope="col">Method</th><th scope="col">Tracking</th><th scope="col">Weight</th><th scope="col">Items</th><th scope="col">Total</th><th scope="col"><span class="hidden">Remove</span></th></tr></thead>
+  <tbody>${R.map(x=>{ const d=x.d, st=sub(x), ok=okOf(x);
+    return `<tr><td>${esc(d.ref||d.file)}</td><td class="num">${esc(d.date||"")}</td><td>${esc(d.method||"")}</td><td>${esc(d.tracking||"")}</td><td class="num">${esc(d.weight||"")}</td><td class="num">${d.items.length}</td>
+      <td class="num">${fmtUsd(st.usd)}<span class="yen">${fmtYen(st.yen)}${ok===false?" · doesn’t match manifest":""}</span></td>
+      <td><button class="linkbtn" type="button" data-remove="${esc(d.key)}" aria-label="Remove ${esc(d.ref||d.file)}">Remove</button></td></tr>`; }).join("")}</tbody>`;
 
-  const meta = [["Package", data.ref],["Delivered", data.date],["Method", data.method],["Tracking", data.tracking],["Weight", data.weight],["Items", rows.length]];
-  $("meta").innerHTML = meta.filter(x=>x[1]!=="" && x[1]!=null).map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("");
-
+  // totals
   $("grandUsd").textContent = fmtUsd(T.landed);
-  $("grandYen").textContent = fmtYen(TY.landed);
-  const allRates = rows.map(r=>r.rate).concat([boxRate]);
+  $("grandYen").textContent = fmtYen(TY.landed) + (manifests.length > 1 ? ` across ${manifests.length} packages` : "");
+  const allRates = R.flatMap(x => x.rows.map(r=>r.rate).concat([x.boxRate]));
   const lo = Math.min(...allRates), hi = Math.max(...allRates);
-  const anyCard = Object.values(cardUsd).some(v=>v>0);
-  $("rateLine").textContent = mode === "one" && !anyCard ? `at ¥${lo.toFixed(2)} per $1` :
-    (Math.abs(hi-lo) < 0.005 ? `at ¥${lo.toFixed(2)} per $1` : `at ¥${lo.toFixed(2)}–${hi.toFixed(2)} per $1 across payment dates`);
+  $("rateLine").textContent = Math.abs(hi-lo) < 0.005 ? `at ¥${lo.toFixed(2)} per $1` : `at ¥${lo.toFixed(2)}–${hi.toFixed(2)} per $1 across payment dates`;
+  const oks = R.map(okOf).filter(v => v !== null);
+  const allOk = oks.length === R.length && oks.every(Boolean);
+  $("stamp").innerHTML = !oks.length ? "" : allOk
+    ? `<div class="stamp" title="Every manifest’s items plus fees equal its grand total">Totals<br>match</div>`
+    : `<div class="stamp bad" title="At least one manifest doesn’t add up; see the package list">Check<br>totals</div>`;
 
-  const payTotal = data.payments.reduce((a,p)=>a+p.amount,0);
-  const ok = data.grandTotal != null && TY.landed === data.grandTotal && (!data.payments.length || payTotal === data.grandTotal);
-  $("stamp").innerHTML = data.grandTotal == null ? "" : ok
-    ? `<div class="stamp" title="Items plus fees equal the manifest’s grand total${data.payments.length?" and the payments add up":""}">Totals<br>match</div>`
-    : `<div class="stamp bad" title="Parsed lines add up to ${fmtYen(TY.landed)}, manifest says ${fmtYen(data.grandTotal)}">Check<br>totals</div>`;
-  if (!ok && data.grandTotal != null) showMsg(`Heads up: the parsed lines add up to ${fmtYen(TY.landed)}, but the manifest’s grand total is ${fmtYen(data.grandTotal)}. Some line may not have been read.`, true);
-
-  const feeUsd = f => cents(f.amount / (category(f)==="fee" ? (TY.fee ? TY.fee/T.fee : boxRate) : boxRate));
+  const fees = R.flatMap(x => x.d.fees);
+  const feeGroups = {};
+  R.forEach(x => x.d.fees.filter(f=>category(f)==="fee").forEach(f => {
+    const rate = x.rows.length ? x.rows.reduce((a,r)=>a+r.fee,0) / x.rows.reduce((a,r)=>a+r.u.fee,0) : x.boxRate;
+    feeGroups[f.label] = (feeGroups[f.label]||0) + f.amount / (rate || x.boxRate);
+  }));
   const cats = [
     ["var(--item)","Items, after coupons", TY.net, T.net, TY.coupon ? `${fmtUsd(-T.coupon)} saved with coupons on ${fmtUsd(T.gross)} list price` : ""],
-    ["var(--fee)","Buyee fees", TY.fee, T.fee, data.fees.filter(f=>category(f)==="fee").map(f=>`${f.label} ${fmtUsd(feeUsd(f))}`).join(", ")],
-    ["var(--ship)","International shipping", TY.ship, T.ship, data.fees.filter(f=>category(f)==="ship").map(f=>f.label).join(", ")],
+    ["var(--fee)","Buyee fees", TY.fee, T.fee, Object.entries(feeGroups).map(([l,u])=>`${l} ${fmtUsd(cents(u))}`).join(", ")],
+    ["var(--ship)","International shipping", TY.ship, T.ship, [...new Set(fees.filter(f=>category(f)==="ship").map(f=>f.label))].join(", ")],
     ["var(--duty)","Customs duty & tax", TY.duty, T.duty, TY.net ? `${(TY.duty/TY.net*100).toFixed(1)}% on top of item cost` : ""]
   ].filter(c => c[2] !== 0 || c[1].startsWith("Items"));
   $("cats").innerHTML = cats.map(([c,l,y,u,note])=>`<li><span class="sw" style="background:${c}"></span><span>${esc(l)}${note?`<span class="note">${esc(note)}</span>`:""}</span><span class="yen num">${fmtYen(y)}</span><span class="usd num">${fmtUsd(u)}</span></li>`).join("");
   $("compbar").innerHTML = cats.map(([c,,y])=>`<i style="background:${c};width:${(y/TY.landed*100).toFixed(3)}%"></i>`).join("");
 
+  // items, grouped by package
+  const multi = manifests.length > 1;
+  const grpRow = (x, cols) => { const st = sub(x);
+    return `<tr class="grp"><td colspan="${cols}">${esc(x.d.ref||x.d.file)}<span class="gmeta">delivered ${esc(x.d.date||"?")}</span><span class="gsum">${fmtUsd(st.usd)}</span></td></tr>`; };
   const cell = (u,y,cls="") => `<td class="num ${cls}">${fmtUsd(cents(u))}<span class="yen">${fmtYen(y)}</span></td>`;
-  $("items").innerHTML = `<thead><tr><th scope="col">Item</th><th scope="col">Price</th><th scope="col">Coupon</th><th scope="col">Buyee fees</th><th scope="col">Shipping</th><th scope="col">Duty &amp; tax</th><th scope="col">Landed cost</th></tr></thead>
-  <tbody>${rows.map(r=>{
+  const itemRow = r => {
     const en = nameEn(r.it.name);
     const bar = ["item","fee","ship","duty"].map(k=>{ const y = k==="item"?r.net:r[k]; return `<i style="background:var(--${k});width:${(y/r.landed*100).toFixed(3)}%"></i>`; }).join("");
     const markup = r.u.net ? ((r.u.landed/r.u.net-1)*100).toFixed(0) : "0";
@@ -608,80 +634,103 @@ function render(){
       <td class="num neg">${r.coupon?fmtUsd(cents(r.u.coupon)):"—"}<span class="yen">${r.coupon?fmtYen(r.coupon):""}</span></td>
       ${cell(r.u.fee,r.fee)}${cell(r.u.ship,r.ship)}${cell(r.u.duty,r.duty)}
       <td class="num landed">${fmtUsd(cents(r.u.landed))}<span class="pct">+${markup}% over price paid</span></td>
-    </tr>`; }).join("")}</tbody>
-  <tfoot><tr><td>Total</td>${cell(T.gross,TY.gross)}<td class="num neg">${fmtUsd(T.coupon)}<span class="yen">${fmtYen(TY.coupon)}</span></td>${cell(T.fee,TY.fee)}${cell(T.ship,TY.ship)}${cell(T.duty,TY.duty)}<td class="num landed">${fmtUsd(T.landed)}<span class="yen">${fmtYen(TY.landed)}</span></td></tr></tfoot>`;
+    </tr>`; };
+  $("items").innerHTML = `<thead><tr><th scope="col">Item</th><th scope="col">Price</th><th scope="col">Coupon</th><th scope="col">Buyee fees</th><th scope="col">Shipping</th><th scope="col">Duty &amp; tax</th><th scope="col">Landed cost</th></tr></thead>
+  <tbody>${R.map(x => (multi ? grpRow(x,7) : "") + x.rows.map(itemRow).join("")).join("")}</tbody>
+  <tfoot><tr><td>Total${multi?` (${rows.length} items)`:""}</td>${cell(T.gross,TY.gross)}<td class="num neg">${fmtUsd(T.coupon)}<span class="yen">${fmtYen(TY.coupon)}</span></td>${cell(T.fee,TY.fee)}${cell(T.ship,TY.ship)}${cell(T.duty,TY.duty)}<td class="num landed">${fmtUsd(T.landed)}<span class="yen">${fmtYen(TY.landed)}</span></td></tr></tfoot>`;
 
-  // payments
-  $("paySec").classList.toggle("hidden", !data.payments.length);
-  const byId = Object.fromEntries(data.items.map(it=>[it.id,it]));
-  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.pay : null;
-  const payUsdSum = cents(m.pays.reduce((a,p)=>a+p.amount/p.rate,0));
+  // payments, grouped by package
+  const anyPays = R.some(x => x.d.payments.length);
+  $("paySec").classList.toggle("hidden", !anyPays);
+  let payYen = 0, payUsd = 0;
+  const payRows = x => { const byId = Object.fromEntries(x.d.items.map(it=>[it.id,it]));
+    return x.m.pays.map(p => {
+      payYen += p.amount; payUsd += p.amount/p.rate;
+      const covers = p.box ? "Shipping, duty & tax" : p.covers.map(id => nameEn(byId[id].name).text).join(", ");
+      const v = (x.d.cardUsd||{})[p.i] > 0 ? x.d.cardUsd[p.i] : "";
+      return `<tr><td>${esc(p.date)}</td><td class="covers">${esc(covers)}</td><td class="num">${fmtYen(p.amount)}</td>
+        <td class="num">¥${p.rate.toFixed(2)}<span class="src">${esc(p.src)}</span></td>
+        <td class="num">${fmtUsd(cents(p.amount/p.rate))}</td>
+        <td class="num"><input type="number" inputmode="decimal" step="0.01" min="0" placeholder="optional" data-key="${esc(x.d.key)}" data-pay="${p.i}" value="${v}" aria-label="USD charged on ${esc(p.date)}"></td></tr>`; }).join(""); };
+  const payBody = R.map(x => (multi && x.d.payments.length ? grpRow(x,6) : "") + payRows(x)).join("");
   $("pays").innerHTML = `<thead><tr><th scope="col">Date</th><th scope="col" style="text-align:left">For</th><th scope="col">Yen</th><th scope="col">Rate</th><th scope="col">USD</th><th scope="col">On your card</th></tr></thead>
-  <tbody>${m.pays.map(p=>{
-    const covers = p.box ? "Shipping, duty & tax" : p.covers.map(id => nameEn(byId[id].name).text).join(", ");
-    const v = cardUsd[p.i] > 0 ? cardUsd[p.i] : "";
-    return `<tr><td>${esc(p.date)}</td><td class="covers">${esc(covers)}</td><td class="num">${fmtYen(p.amount)}</td>
-      <td class="num">¥${p.rate.toFixed(2)}<span class="src">${esc(p.src)}</span></td>
-      <td class="num">${fmtUsd(cents(p.amount/p.rate))}</td>
-      <td class="num"><input type="number" inputmode="decimal" step="0.01" min="0" placeholder="optional" data-pay="${p.i}" value="${v}" aria-label="USD charged on ${esc(p.date)}"></td></tr>`; }).join("")}</tbody>
-  <tfoot><tr><td>Total</td><td></td><td class="num">${fmtYen(payTotal)}</td><td></td><td class="num">${fmtUsd(payUsdSum)}</td><td></td></tr></tfoot>`;
-  if (focused != null){ const el = document.querySelector(`[data-pay="${focused}"]`); if (el){ el.focus(); const n = el.value.length; try{ el.setSelectionRange(n,n); }catch(e){} } }
+  <tbody>${payBody}</tbody>
+  <tfoot><tr><td>Total</td><td></td><td class="num">${fmtYen(payYen)}</td><td></td><td class="num">${fmtUsd(cents(payUsd))}</td><td></td></tr></tfoot>`;
 
-  $("foot").textContent = (unassigned.length ? `The manifest didn’t say which items ${unassigned.join(" and ")} belonged to, so it was split by price. ` : "") +
-    `Shipping and duty are shared ${split==="even"?"equally across items":"in proportion to each item’s price after coupons"} and converted at the rate for that charge (${boxDate}). ` +
+  const unassigned = [...new Set(R.flatMap(x => x.unassigned))];
+  $("foot").textContent = (unassigned.length ? `A manifest didn’t say which items ${unassigned.join(" and ")} belonged to, so it was split by price. ` : "") +
+    `Within each package, shipping and duty are shared ${split==="even"?"equally across its items":"in proportion to each item’s price after coupons"} and converted at the rate on the day they were charged. ` +
     `Market rates are daily reference rates; your card issuer uses its own rate and may add a foreign transaction fee, so type in your card amounts for exact numbers.`;
 
-  window.__tsv = [["Item (English)","Item (Japanese)","Order ID","Paid on","Rate (JPY per USD)","Price (JPY)","Coupon (JPY)","Buyee fees (JPY)","Shipping (JPY)","Duty (JPY)","Landed (JPY)","Price (USD)","Coupon (USD)","Buyee fees (USD)","Shipping (USD)","Duty (USD)","Landed (USD)"].join("\t"),
-    ...rows.map(r=>[nameEn(r.it.name).text,r.it.name,r.it.id,r.paidOn||"",r.rate.toFixed(2),r.gross,r.coupon,r.fee,r.ship,r.duty,r.landed,
-      ...["gross","coupon","fee","ship","duty","landed"].map(k=>cents(r.u[k]).toFixed(2))].join("\t"))].join("\n");
+  window.__tsv = [["Package","Delivered","Item (English)","Item (Japanese)","Order ID","Paid on","Rate (JPY per USD)","Price (JPY)","Coupon (JPY)","Buyee fees (JPY)","Shipping (JPY)","Duty (JPY)","Landed (JPY)","Price (USD)","Coupon (USD)","Buyee fees (USD)","Shipping (USD)","Duty (USD)","Landed (USD)"].join("\t"),
+    ...R.flatMap(x => x.rows.map(r=>[x.d.ref||x.d.file,x.d.date||"",nameEn(r.it.name).text,r.it.name,r.it.id,r.paidOn||"",r.rate.toFixed(2),r.gross,r.coupon,r.fee,r.ship,r.duty,r.landed,
+      ...["gross","coupon","fee","ship","duty","landed"].map(k=>cents(r.u[k]).toFixed(2))].join("\t")))].join("\n");
 }
 
-async function handle(file){
-  if (!file) return;
-  showMsg("Reading " + file.name + "…");
-  try{
-    const d = await readPdf(file);
-    if (d.warnings.length && !d.items.length){ showMsg(d.warnings[0], true); return; }
-    data = d; showMsg("");
-    cardUsd = {}; try { cardUsd = JSON.parse(store.get("buyee.card." + (d.ref||file.name)) || "{}"); } catch(e){}
-    $("out").classList.remove("hidden");
-    $("drop").classList.add("compact");
-    $("dropTitle").textContent = file.name;
-    $("dropHint").textContent = "Choose another manifest";
-    $("copybox").classList.add("hidden");
-    render();
-    const missing = [...new Set(d.payments.map(p=>isoOf(p.date)).concat([isoOf(d.date)]).filter(x => x && !tableRate(x)))];
-    if (missing.length){ await fetchMissing(missing); render(); }
-    translateItems();
-  }catch(e){
-    console.error(e);
-    showMsg("Couldn’t read that PDF: " + (e && e.message ? e.message : e), true);
+function save(){ store.set("buyee.manifests", JSON.stringify(manifests)); }
+try { const saved = JSON.parse(store.get("buyee.manifests") || "[]"); if (Array.isArray(saved)) manifests = saved.filter(d => d && Array.isArray(d.items)); } catch(e){}
+const sortManifests = () => manifests.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.ref).localeCompare(String(b.ref)));
+
+async function handle(fileList){
+  const files = [...(fileList||[])].filter(f => /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name));
+  if (!files.length){ if (fileList && fileList.length) showMsg("Those aren’t PDF files. Choose Buyee “Breakdown of Expenses” PDFs.", true); return; }
+  const notes = [], added = [];
+  for (const file of files){
+    showMsg(`Reading ${file.name}…`);
+    try{
+      const d = await readPdf(file);
+      if (!d.items.length){ notes.push(`${file.name}: no purchased items found. It may not be a Buyee “Breakdown of Expenses” file.`); continue; }
+      d.file = file.name; d.key = d.ref || file.name;
+      if (manifests.some(m => m.key === d.key)){ notes.push(`${d.ref || file.name} was already added.`); continue; }
+      d.cardUsd = {};
+      try { d.cardUsd = JSON.parse(store.get("buyee.card." + d.key) || "{}"); } catch(e){}
+      manifests.push(d); added.push(d);
+    }catch(e){
+      console.error(e);
+      notes.push(`${file.name}: couldn’t read it (${e && e.message ? e.message : e}).`);
+    }
   }
+  sortManifests(); save();
+  showMsg(notes.join(" "), notes.length > 0 && !added.length);
+  $("copybox").classList.add("hidden");
+  render();
+  const missing = [...new Set(added.flatMap(d => d.payments.map(p=>isoOf(p.date)).concat([isoOf(d.date)])).filter(x => x && !tableRate(x)))];
+  if (missing.length){ await fetchMissing(missing); render(); }
+  if (added.length) translateItems();
 }
 
-$("file").addEventListener("change", e => handle(e.target.files[0]));
+$("file").addEventListener("change", e => { handle(e.target.files); e.target.value = ""; });
 const drop = $("drop");
 drop.addEventListener("keydown", e => { if (e.key==="Enter"||e.key===" "){ e.preventDefault(); $("file").click(); }});
 ["dragenter","dragover"].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add("over");}));
 ["dragleave","drop"].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove("over");}));
-drop.addEventListener("drop", e => handle(e.dataTransfer.files[0]));
+drop.addEventListener("drop", e => handle(e.dataTransfer.files));
 $("rate").addEventListener("input", () => { const v=parseFloat($("rate").value); if (v>0) store.set("buyee.rate", v); render(); });
 document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => { mode = b.dataset.mode; store.set("buyee.mode", mode); render();
   $("oneRateField").classList.toggle("hidden", mode !== "one"); document.querySelectorAll("[data-mode]").forEach(x => x.setAttribute("aria-pressed", String(x===b))); }));
 $("oneRateField").classList.toggle("hidden", mode !== "one");
 document.querySelectorAll("[data-mode]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.mode===mode)));
 $("pays").addEventListener("change", e => {
-  const i = e.target.dataset.pay; if (i == null || !data) return;
+  const i = e.target.dataset.pay, key = e.target.dataset.key; if (i == null) return;
+  const d = manifests.find(m => m.key === key); if (!d) return;
   const v = parseFloat(e.target.value);
-  if (v > 0) cardUsd[i] = v; else delete cardUsd[i];
-  store.set("buyee.card." + (data.ref || "x"), JSON.stringify(cardUsd));
+  d.cardUsd = d.cardUsd || {};
+  if (v > 0) d.cardUsd[i] = v; else delete d.cardUsd[i];
+  store.set("buyee.card." + d.key, JSON.stringify(d.cardUsd)); save();
   render();
 });
+$("meta").addEventListener("click", e => {
+  const b = e.target.closest("[data-remove]"); if (!b) return;
+  manifests = manifests.filter(m => m.key !== b.dataset.remove); save(); showMsg(""); render();
+});
+$("clearAll").addEventListener("click", () => { manifests = []; save(); showMsg(""); render(); });
 document.querySelectorAll("[data-split]").forEach(b => b.addEventListener("click", () => {
   split = b.dataset.split;
   document.querySelectorAll("[data-split]").forEach(x => x.setAttribute("aria-pressed", String(x===b)));
   render();
 }));
+render();
+if (manifests.length) translateItems();
 $("copy").addEventListener("click", async () => {
   if (!window.__tsv) return;
   try { await navigator.clipboard.writeText(window.__tsv); $("copy").textContent = "Copied"; setTimeout(()=>$("copy").textContent="Copy table",1600); }
