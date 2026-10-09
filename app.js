@@ -1,4 +1,3 @@
-// Global error catcher to display any script crashes directly on screen
 window.onerror = function(msg, url, line) {
   updateStatus(`Error: ${msg} (Line ${line})`, true);
 };
@@ -19,9 +18,6 @@ let store = {
       id: 'Default_Project',
       name: 'Default Project',
       tariffRate: 10.0,
-      shippingUSD: 0.0,
-      feesUSD: 0.0,
-      allocationStrategy: 'proportional',
       fxMode: 'receipt',
       items: []
     }
@@ -53,7 +49,90 @@ function updateStatus(msg, isError = false) {
   }
 }
 
-// Handler bound directly to file input change event
+// Ultra-fast batch translation logic
+async function translateItemsInBatch(items) {
+  if (!items || items.length === 0) return;
+
+  const titles = items.map(i => i.itemTitle || '');
+  const sellers = items.map(i => i.seller || '');
+
+  const translatedTitles = await batchTranslateArray(titles);
+  const translatedSellers = await batchTranslateArray(sellers);
+
+  items.forEach((item, idx) => {
+    if (translatedTitles[idx]) item.itemTitle = translatedTitles[idx];
+    if (translatedSellers[idx]) item.seller = translatedSellers[idx];
+  });
+}
+
+async function batchTranslateArray(textArray) {
+  const results = [];
+  const delimiter = " ||| ";
+  let currentChunk = [];
+  let currentLen = 0;
+
+  for (let text of textArray) {
+    const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
+    if (!hasJapanese) {
+      results.push(text);
+      continue;
+    }
+
+    if (currentLen + text.length > 1200 && currentChunk.length > 0) {
+      const translatedChunk = await translateSingleChunk(currentChunk, delimiter);
+      results.push(...translatedChunk);
+      currentChunk = [text];
+      currentLen = text.length;
+    } else {
+      currentChunk.push(text);
+      currentLen += text.length;
+    }
+  }
+
+  if (currentChunk.length > 0) {
+    const translatedChunk = await translateSingleChunk(currentChunk, delimiter);
+    results.push(...translatedChunk);
+  }
+
+  return results;
+}
+
+async function translateSingleChunk(chunk, delimiter) {
+  const joined = chunk.join(delimiter);
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t&q=${encodeURIComponent(joined)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data && data[0]) {
+      const fullStr = data[0].map(item => item[0]).join('');
+      const splitStr = fullStr.split(/\s*\|\|\|\s*/);
+      return chunk.map((orig, idx) => splitStr[idx] ? splitStr[idx].trim() : orig);
+    }
+  } catch (err) {
+    console.warn("Batch translate request failed:", err);
+  }
+  return chunk;
+}
+
+window.translateAllExistingItems = async function() {
+  const p = getCurrentProject();
+  if (!p.items || p.items.length === 0) {
+    alert("No items in list to translate.");
+    return;
+  }
+  
+  const button = document.getElementById('translateBtn');
+  if (button) button.innerText = "Translating...";
+  updateStatus("Translating titles to English...");
+
+  await translateItemsInBatch(p.items);
+
+  updateCalculations();
+  if (button) button.innerText = "Translate Titles to English";
+  updateStatus("Finished translating item titles!");
+  alert(`Finished translating titles!`);
+};
+
 window.handleFileSelect = async function(event) {
   try {
     const file = event.target.files && event.target.files[0];
@@ -96,10 +175,13 @@ window.processPdfFile = async function(file) {
     const parsed = parseBuyeeTextStream(fullText);
     
     if (parsed.length > 0) {
+      updateStatus(`Translating ${parsed.length} item titles to English...`);
+      await translateItemsInBatch(parsed);
+
       getCurrentProject().items = [...parsed, ...getCurrentProject().items];
       updateCalculations();
-      updateStatus(`Success: Imported ${parsed.length} order items!`);
-      alert(`Successfully imported ${parsed.length} orders!`);
+      updateStatus(`Success: Imported & translated ${parsed.length} orders!`);
+      alert(`Successfully imported and translated ${parsed.length} orders!`);
     } else {
       updateStatus("No order records found in PDF format.", true);
       alert("PDF read successfully, but no orders matched the expected Buyee receipt format.");
@@ -165,8 +247,6 @@ function parseBuyeeTextStream(text) {
         qty: qty,
         priceJPY: priceJPY,
         printedUSD: printedUSD,
-        shippingUSD: 0,
-        feeUSD: 0,
         tariffPercent: currentTariff,
         selected: false
       });
@@ -175,46 +255,6 @@ function parseBuyeeTextStream(text) {
 
   return items;
 }
-
-async function translateText(text) {
-  if (!text || typeof text !== 'string') return text;
-  const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
-  if (!hasJapanese) return text;
-
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t&q=${encodeURIComponent(text)}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    if (data && data[0]) {
-      return data[0].map(item => item[0]).join('');
-    }
-  } catch (err) {
-    console.warn("Translation skipped:", err);
-  }
-  return text;
-}
-
-window.translateAllExistingItems = async function() {
-  const p = getCurrentProject();
-  if (!p.items || p.items.length === 0) {
-    alert("No items in list to translate.");
-    return;
-  }
-  
-  const button = document.getElementById('translateBtn');
-  if (button) button.innerText = "Translating...";
-
-  let count = 0;
-  for (let item of p.items) {
-    item.itemTitle = await translateText(item.itemTitle);
-    item.seller = await translateText(item.seller);
-    count++;
-  }
-
-  updateCalculations();
-  if (button) button.innerText = "Translate to English";
-  alert(`Finished translating ${count} items!`);
-};
 
 window.applyGlobalChangesToAllRows = function() {
   const p = getCurrentProject();
@@ -225,9 +265,6 @@ window.applyGlobalChangesToAllRows = function() {
 
   const tariffVal = parseFloat(document.getElementById('globalTariffInput')?.value) || 0;
   p.tariffRate = tariffVal;
-  p.shippingUSD = parseFloat(document.getElementById('globalShippingInput')?.value) || 0;
-  p.feesUSD = parseFloat(document.getElementById('globalFeesInput')?.value) || 0;
-  p.allocationStrategy = document.getElementById('allocationStrategy')?.value || 'proportional';
   p.fxMode = document.getElementById('fxMode')?.value || 'receipt';
 
   p.items.forEach(item => {
@@ -235,21 +272,12 @@ window.applyGlobalChangesToAllRows = function() {
   });
 
   updateCalculations();
-  alert(`Applied global settings (${tariffVal}% Tariff, $${p.shippingUSD.toFixed(2)} Shipping, $${p.feesUSD.toFixed(2)} Fees) to all ${p.items.length} items!`);
+  alert(`Applied global tariff (${tariffVal}%) to all ${p.items.length} items!`);
 };
 
 function setupGlobalInputs() {
   const tariffInput = document.getElementById('globalTariffInput');
   if (tariffInput) tariffInput.addEventListener('input', updateCalculations);
-
-  const shippingInput = document.getElementById('globalShippingInput');
-  if (shippingInput) shippingInput.addEventListener('input', updateCalculations);
-
-  const feesInput = document.getElementById('globalFeesInput');
-  if (feesInput) feesInput.addEventListener('input', updateCalculations);
-
-  const allocSelect = document.getElementById('allocationStrategy');
-  if (allocSelect) allocSelect.addEventListener('change', updateCalculations);
 
   const fxSelect = document.getElementById('fxMode');
   if (fxSelect) fxSelect.addEventListener('change', updateCalculations);
@@ -308,9 +336,6 @@ function renderProjectDropdown() {
 function loadProjectUI() {
   const p = getCurrentProject();
   if (document.getElementById('globalTariffInput')) document.getElementById('globalTariffInput').value = p.tariffRate;
-  if (document.getElementById('globalShippingInput')) document.getElementById('globalShippingInput').value = p.shippingUSD;
-  if (document.getElementById('globalFeesInput')) document.getElementById('globalFeesInput').value = p.feesUSD;
-  if (document.getElementById('allocationStrategy')) document.getElementById('allocationStrategy').value = p.allocationStrategy;
   if (document.getElementById('fxMode')) document.getElementById('fxMode').value = p.fxMode;
   updateCalculations();
 }
@@ -326,8 +351,7 @@ function createNewProjectPrompt() {
   if (name && name.trim()) {
     const id = 'proj_' + Date.now();
     store.projects[id] = {
-      id, name: name.trim(), tariffRate: 10.0, shippingUSD: 0.0,
-      feesUSD: 0.0, allocationStrategy: 'proportional', fxMode: 'receipt', items: []
+      id, name: name.trim(), tariffRate: 10.0, fxMode: 'receipt', items: []
     };
     store.activeProjectId = id;
     saveStoreToLocalStorage();
@@ -368,48 +392,23 @@ function getFxRate(item, fxMode) {
 function updateCalculations() {
   const p = getCurrentProject();
   if (document.getElementById('globalTariffInput')) p.tariffRate = parseFloat(document.getElementById('globalTariffInput').value) || 0;
-  if (document.getElementById('globalShippingInput')) p.shippingUSD = parseFloat(document.getElementById('globalShippingInput').value) || 0;
-  if (document.getElementById('globalFeesInput')) p.feesUSD = parseFloat(document.getElementById('globalFeesInput').value) || 0;
-  if (document.getElementById('allocationStrategy')) p.allocationStrategy = document.getElementById('allocationStrategy').value;
   if (document.getElementById('fxMode')) p.fxMode = document.getElementById('fxMode').value;
 
   const items = p.items;
-  const totalQty = items.reduce((acc, i) => acc + (i.qty || 1), 0);
 
-  let totalItemCostUSD = 0;
+  let totalBaseUSD = 0, totalTariffUSD = 0, totalLandedUSD = 0;
   items.forEach(item => {
     item.fxRate = getFxRate(item, p.fxMode);
     item.unitPriceUSD = item.priceJPY * item.fxRate;
     item.itemCostUSD = item.unitPriceUSD * (item.qty || 1);
-    totalItemCostUSD += item.itemCostUSD;
-  });
-
-  items.forEach(item => {
-    if (totalQty > 0) {
-      if (p.allocationStrategy === 'equal') {
-        item.shippingUSD = p.shippingUSD / totalQty;
-        item.feeUSD = p.feesUSD / totalQty;
-      } else {
-        const ratio = totalItemCostUSD > 0 ? (item.itemCostUSD / totalItemCostUSD) : (1 / totalQty);
-        item.shippingUSD = p.shippingUSD * ratio;
-        item.feeUSD = p.feesUSD * ratio;
-      }
-    } else {
-      item.shippingUSD = 0;
-      item.feeUSD = 0;
-    }
 
     if (item.tariffPercent === undefined) item.tariffPercent = p.tariffRate;
     item.tariffUSD = item.itemCostUSD * (item.tariffPercent / 100);
-    item.landedCostUSD = item.itemCostUSD + item.shippingUSD + item.feeUSD + item.tariffUSD;
-  });
+    item.landedCostUSD = item.itemCostUSD + item.tariffUSD;
 
-  let totalBaseUSD = 0, totalFreightFeesUSD = 0, totalTariffUSD = 0, totalLandedUSD = 0;
-  items.forEach(i => {
-    totalBaseUSD += i.itemCostUSD;
-    totalFreightFeesUSD += (i.shippingUSD + i.feeUSD);
-    totalTariffUSD += i.tariffUSD;
-    totalLandedUSD += i.landedCostUSD;
+    totalBaseUSD += item.itemCostUSD;
+    totalTariffUSD += item.tariffUSD;
+    totalLandedUSD += item.landedCostUSD;
   });
 
   const statCount = document.getElementById('statCount');
@@ -417,9 +416,6 @@ function updateCalculations() {
 
   const statTotalUSD = document.getElementById('statTotalUSD');
   if (statTotalUSD) statTotalUSD.innerText = '$' + totalBaseUSD.toFixed(2);
-
-  const statFreight = document.getElementById('statTotalFreightFees');
-  if (statFreight) statFreight.innerText = '$' + totalFreightFeesUSD.toFixed(2);
 
   const statTariff = document.getElementById('statTotalTariff');
   if (statTariff) statTariff.innerText = '$' + totalTariffUSD.toFixed(2);
@@ -460,8 +456,6 @@ function renderTable() {
       <td class="p-3 text-right font-mono text-amber-300">$${(item.unitPriceUSD || 0).toFixed(2)}</td>
       <td class="p-3 text-right font-mono text-slate-400 text-[11px]">$${item.fxRate.toFixed(5)}</td>
       <td class="p-3 text-right font-mono font-semibold text-sky-300">$${item.itemCostUSD.toFixed(2)}</td>
-      <td class="p-3 text-right font-mono text-slate-300 text-[11px]">$${item.shippingUSD.toFixed(2)}</td>
-      <td class="p-3 text-right font-mono text-slate-300 text-[11px]">$${item.feeUSD.toFixed(2)}</td>
       <td class="p-3 text-right"><input type="number" step="0.1" value="${item.tariffPercent}" onchange="updateItemValue('${item.id}', 'tariffPercent', parseFloat(this.value)||0)" class="w-14 bg-slate-900 text-right px-1 text-xs text-rose-300 rounded"></td>
       <td class="p-3 text-right font-mono text-rose-400">$${item.tariffUSD.toFixed(2)}</td>
       <td class="p-3 text-right font-mono font-bold text-emerald-400">$${item.landedCostUSD.toFixed(2)}</td>
@@ -483,7 +477,7 @@ function addNewRow() {
     id: String(Date.now() + Math.random()),
     orderDate: '7 Oct 2026', orderId: `ORD-${Math.floor(Math.random()*90000)}`,
     itemTitle: 'New Item Description', seller: 'Mercari Seller', qty: 1, priceJPY: 10000,
-    shippingUSD: 0, feeUSD: 0, tariffPercent: p.tariffRate, selected: false
+    tariffPercent: p.tariffRate, selected: false
   });
   updateCalculations();
 }
@@ -499,7 +493,7 @@ function exportToExcel() {
   const exportData = items.map((item, idx) => ({
     'Row #': idx + 1, 'Date': item.orderDate, 'Order ID': item.orderId,
     'Item Title': item.itemTitle, 'Seller': item.seller, 'Qty': item.qty,
-    'Unit Price ($USD)': item.unitPriceUSD.toFixed(2), 'FX Rate': item.fxRate.toFixed(5),     'Base Cost ($ USD)': item.itemCostUSD.toFixed(2), 'Shipping ($USD)': item.shippingUSD.toFixed(2),     'Fees ($ USD)': item.feeUSD.toFixed(2), 'Tariff Rate (%)': item.tariffPercent + '%',
+    'Unit Price ($USD)': item.unitPriceUSD.toFixed(2), 'FX Rate': item.fxRate.toFixed(5),     'Base Cost ($ USD)': item.itemCostUSD.toFixed(2), 'Tariff Rate (%)': item.tariffPercent + '%',
     'Tariff ($USD)': item.tariffUSD.toFixed(2), 'Landed Cost ($ USD)': item.landedCostUSD.toFixed(2)
   }));
   const ws = XLSX.utils.json_to_sheet(exportData);

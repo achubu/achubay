@@ -83,35 +83,15 @@
       <!-- Global Controls Panel -->
       <div class="lg:col-span-2 bg-slate-800/60 border border-slate-700/80 rounded-xl p-5 flex flex-col justify-between">
         <div>
-          <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Global Cost Allocation Settings</h2>
+          <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Global Cost Settings</h2>
           
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label class="block text-xs font-medium text-slate-300 mb-1">Global Tariff Rate (%)</label>
               <input type="number" id="globalTariffInput" step="0.1" value="10.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-rose-300 font-mono font-bold focus:outline-none focus:border-indigo-500">
             </div>
 
             <div>
-              <label class="block text-xs font-medium text-slate-300 mb-1">International Ship ($)</label>
-              <input type="number" id="globalShippingInput" step="0.01" value="0.00" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-indigo-500">
-            </div>
-
-            <div>
-              <label class="block text-xs font-medium text-slate-300 mb-1">Service/Consol Fees ($)</label>
-              <input type="number" id="globalFeesInput" step="0.01" value="0.00" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-indigo-500">
-            </div>
-
-            <div>
-              <label class="block text-xs font-medium text-slate-300 mb-1">Cost Allocation Mode</label>
-              <select id="allocationStrategy" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
-                <option value="proportional">Proportional (Value %)</option>
-                <option value="equal">Equal Split Per Item</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <div class="col-span-2 sm:col-span-1">
               <label class="block text-xs font-medium text-slate-300 mb-1">FX Conversion Mode</label>
               <select id="fxMode" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
                 <option value="receipt">Receipt Print Rate</option>
@@ -126,19 +106,19 @@
         <div class="mt-5 pt-3 border-t border-slate-700/60 flex flex-wrap gap-2 justify-end">
           <button id="translateBtn" onclick="translateAllExistingItems()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5">
             <i data-lucide="languages" class="w-4 h-4"></i>
-            Translate to English
+            Translate Titles to English
           </button>
 
           <button id="applyGlobalBtn" onclick="applyGlobalChangesToAllRows()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-1.5 rounded-lg text-xs shadow transition flex items-center gap-1.5">
             <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-            Apply Settings to All Rows
+            Apply Global Tariff to All Rows
           </button>
         </div>
       </div>
     </div>
 
     <!-- Summary Statistics Dashboard -->
-    <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
       <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
         <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Items</p>
         <p id="statCount" class="text-xl font-bold text-slate-100 mt-1 font-mono">0</p>
@@ -150,16 +130,11 @@
       </div>
 
       <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
-        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Freight & Fees ($)</p>
-        <p id="statTotalFreightFees" class="text-xl font-bold text-slate-300 mt-1 font-mono">$0.00</p>
-      </div>
-
-      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
         <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Tariff ($)</p>
         <p id="statTotalTariff" class="text-xl font-bold text-rose-400 mt-1 font-mono">$0.00</p>
       </div>
 
-      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4 col-span-2 sm:col-span-1">
+      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
         <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Landed Cost ($)</p>
         <p id="statTotalLanded" class="text-xl font-bold text-emerald-400 mt-1 font-mono">$0.00</p>
       </div>
@@ -208,8 +183,6 @@
               <th class="p-3 text-right">Unit Price ($)</th>
               <th class="p-3 text-right">FX Rate</th>
               <th class="p-3 text-right">Base Cost ($)</th>
-              <th class="p-3 text-right">Shipping ($)</th>
-              <th class="p-3 text-right">Fees ($)</th>
               <th class="p-3 text-right">Tariff %</th>
               <th class="p-3 text-right">Tariff ($)</th>
               <th class="p-3 text-right">Landed Cost ($)</th>
