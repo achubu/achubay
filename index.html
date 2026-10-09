@@ -75,8 +75,8 @@
         <div class="p-3 bg-slate-800 rounded-full border border-slate-700 group-hover:border-indigo-500 text-indigo-400 mb-3 transition">
           <i data-lucide="file-up" class="w-6 h-6"></i>
         </div>
-        <h3 class="text-sm font-semibold text-slate-200">Import Buyee Orders PDF</h3>
-        <p class="text-xs text-slate-400 mt-1">Click to select file or drag & drop here</p>
+        <h3 class="text-sm font-semibold text-slate-200">Import Orders or Shipping PDF</h3>
+        <p class="text-xs text-slate-400 mt-1">Order Receipts & Package Shipping PDFs</p>
         <p id="uploadStatus" class="text-[11px] font-mono text-indigo-300 mt-3 bg-slate-900/80 px-3 py-1 rounded border border-indigo-900/50">Status: Ready for PDF</p>
       </div>
 
@@ -87,7 +87,7 @@
           
           <div class="max-w-xs">
             <label class="block text-xs font-medium text-slate-300 mb-1">Global Tariff Rate (%)</label>
-            <input type="number" id="globalTariffInput" step="0.1" value="10.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-rose-300 font-mono font-bold focus:outline-none focus:border-indigo-500">
+            <input type="number" id="globalTariffInput" step="0.001" value="12.566" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-rose-300 font-mono font-bold focus:outline-none focus:border-indigo-500">
           </div>
         </div>
 
@@ -107,7 +107,7 @@
     </div>
 
     <!-- Summary Statistics Dashboard -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
       <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
         <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Items</p>
         <p id="statCount" class="text-xl font-bold text-slate-100 mt-1 font-mono">0</p>
@@ -119,11 +119,16 @@
       </div>
 
       <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Shipping ($)</p>
+        <p id="statTotalShipping" class="text-xl font-bold text-amber-300 mt-1 font-mono">$0.00</p>
+      </div>
+
+      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
         <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Tariff ($)</p>
         <p id="statTotalTariff" class="text-xl font-bold text-rose-400 mt-1 font-mono">$0.00</p>
       </div>
 
-      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+      <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4 col-span-2 sm:col-span-1">
         <p class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Total Landed Cost ($)</p>
         <p id="statTotalLanded" class="text-xl font-bold text-emerald-400 mt-1 font-mono">$0.00</p>
       </div>
@@ -171,6 +176,7 @@
               <th class="p-3 text-right">Qty</th>
               <th class="p-3 text-right">Unit Price ($)</th>
               <th class="p-3 text-right">Base Cost ($)</th>
+              <th class="p-3 text-right">Shipping ($)</th>
               <th class="p-3 text-right">Tariff %</th>
               <th class="p-3 text-right">Tariff ($)</th>
               <th class="p-3 text-right">Landed Cost ($)</th>

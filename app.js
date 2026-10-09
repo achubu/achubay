@@ -17,7 +17,7 @@ let store = {
     'Default_Project': {
       id: 'Default_Project',
       name: 'Default Project',
-      tariffRate: 10.0,
+      tariffRate: 12.566,
       items: []
     }
   }
@@ -48,7 +48,6 @@ function updateStatus(msg, isError = false) {
   }
 }
 
-// CORS-compliant translation via MyMemory API
 async function fetchTranslation(text) {
   if (!text || typeof text !== 'string') return text;
   const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/.test(text);
@@ -62,7 +61,6 @@ async function fetchTranslation(text) {
     
     if (data && data.responseData && data.responseData.translatedText) {
       let result = data.responseData.translatedText;
-      // Filter out API quota error messages if rate limited
       if (!result.includes("QUERY LENGTH LIMIT EXCEEDED") && !result.includes("MYMEMORY WARNING")) {
         return result;
       }
@@ -73,7 +71,6 @@ async function fetchTranslation(text) {
   return text;
 }
 
-// Sequential item-by-item translation with live status progress
 async function translateItemList(items) {
   if (!items || items.length === 0) return;
 
@@ -147,19 +144,36 @@ window.processPdfFile = async function(file) {
       fullText += " " + textContent.items.map(item => item.str).join(' ');
     }
 
-    updateStatus("Parsing Buyee order layout...");
-    const parsed = parseBuyeeTextStream(fullText);
-    
-    if (parsed.length > 0) {
-      await translateItemList(parsed);
+    // Check if PDF is a Shipping Receipt vs Order Receipt
+    const isShippingPdf = /Package\s*Reference\s*No|Breakdown\s*of\s*Expenses|International\s*Shipping\s*Fee/i.test(fullText);
 
-      getCurrentProject().items = [...parsed, ...getCurrentProject().items];
-      updateCalculations();
-      updateStatus(`Success: Imported & translated ${parsed.length} orders!`);
-      alert(`Successfully imported and translated ${parsed.length} orders!`);
+    if (isShippingPdf) {
+      updateStatus("Processing Shipping Package PDF...");
+      const result = parseBuyeeShippingPdf(fullText, getCurrentProject());
+      
+      if (result.success) {
+        updateCalculations();
+        updateStatus(`Allocated ${result.shippingJPY} JPY shipping across ${result.matchedCount} items!`);
+        alert(`Success! Allocated ${result.shippingJPY} JPY International Shipping Fee across ${result.matchedCount} matching items.`);
+      } else {
+        updateStatus(result.message, true);
+        alert(result.message);
+      }
     } else {
-      updateStatus("No order records found in PDF format.", true);
-      alert("PDF read successfully, but no orders matched the expected Buyee receipt format.");
+      updateStatus("Parsing Buyee order layout...");
+      const parsed = parseBuyeeTextStream(fullText);
+      
+      if (parsed.length > 0) {
+        await translateItemList(parsed);
+
+        getCurrentProject().items = [...parsed, ...getCurrentProject().items];
+        updateCalculations();
+        updateStatus(`Success: Imported & translated ${parsed.length} orders!`);
+        alert(`Successfully imported and translated ${parsed.length} orders!`);
+      } else {
+        updateStatus("No order records found in PDF format.", true);
+        alert("PDF read successfully, but no orders matched the expected Buyee receipt format.");
+      }
     }
   } catch (err) {
     updateStatus("PDF Error: " + err.message, true);
@@ -167,9 +181,63 @@ window.processPdfFile = async function(file) {
   }
 };
 
+function parseBuyeeShippingPdf(text, project) {
+  let intlShippingJPY = 0;
+
+  // Extract ONLY International Shipping Fee
+  const shipMatch = text.match(/International\s*Shipping\s*Fee\s*\|?\s*([\d,]+)/i);
+  if (shipMatch) {
+    intlShippingJPY = parseFloat(shipMatch[1].replace(/,/g, '')) || 0;
+  } else {
+    // Fallback regex for International Shipping Fee
+    const altMatch = text.match(/Shipping\s*Expenses[\s\S]*?International\s*Shipping\s*Fee[\s\S]*?([\d,]+)/i);
+    if (altMatch) intlShippingJPY = parseFloat(altMatch[1].replace(/,/g, '')) || 0;
+  }
+
+  if (intlShippingJPY <= 0) {
+    return {
+      success: false,
+      message: "Could not locate 'International Shipping Fee' in the PDF."
+    };
+  }
+
+  // Extract Order IDs contained in the shipping PDF
+  const rawIdMatches = text.match(/([A-Z0-9]{10,14})/gi) || [];
+  const uniquePdfIds = [...new Set(rawIdMatches.map(id => id.trim()))];
+
+  // Find matching items in active project by Order ID
+  const matchedItems = project.items.filter(item => {
+    if (!item.orderId) return false;
+    const cleanItemOrderId = item.orderId.replace(/[^A-Z0-9]/gi, '');
+    return uniquePdfIds.some(pdfId => cleanItemOrderId.includes(pdfId) || pdfId.includes(cleanItemOrderId));
+  });
+
+  if (matchedItems.length === 0) {
+    return { 
+      success: false, 
+      message: "No matching order IDs found in current project for this package. Import the order PDFs first!" 
+    };
+  }
+
+  // Calculate proportional share strictly for International Shipping Fee by JPY item price
+  const totalMatchedJPY = matchedItems.reduce((sum, i) => sum + (i.priceJPY || 0), 0);
+
+  matchedItems.forEach(item => {
+    const ratio = totalMatchedJPY > 0 ? (item.priceJPY / totalMatchedJPY) : (1 / matchedItems.length);
+    const itemShippingJPY = intlShippingJPY * ratio;
+    item.shippingUSD = itemShippingJPY * (item.fxRate || 0.0064);
+  });
+
+  return {
+    success: true,
+    matchedCount: matchedItems.length,
+    shippingJPY: intlShippingJPY
+  };
+}
+
 function parseBuyeeTextStream(text) {
   const items = [];
-  const currentTariff = getCurrentProject().tariffRate || 10;
+  const currentTariff = getCurrentProject().tariffRate || 12.566;
   const cleanText = text.replace(/Order\s*date([0-9])/gi, 'Order date $1');
   const orderHeaderRegex = /([A-Z0-9]{10,14})\s*Order\s*date\s*(\d{1,2}\s+[A-Za-z]{3}\s+20\d{2})/gi;
   const matches = [...cleanText.matchAll(orderHeaderRegex)];
@@ -222,6 +290,7 @@ function parseBuyeeTextStream(text) {
         qty: qty,
         priceJPY: priceJPY,
         printedUSD: printedUSD,
+        shippingUSD: 0.00,
         tariffPercent: currentTariff,
         selected: false
       });
@@ -321,7 +390,7 @@ function createNewProjectPrompt() {
   if (name && name.trim()) {
     const id = 'proj_' + Date.now();
     store.projects[id] = {
-      id, name: name.trim(), tariffRate: 10.0, items: []
+      id, name: name.trim(), tariffRate: 12.566, items: []
     };
     store.activeProjectId = id;
     saveStoreToLocalStorage();
@@ -345,7 +414,6 @@ function deleteCurrentProject() {
   }
 }
 
-// Automatic FX calculation directly from printed receipt USD figure or historical lookup
 function getFxRate(item) {
   if (item.printedUSD && item.priceJPY > 0) {
     return item.printedUSD / item.priceJPY;
@@ -367,17 +435,19 @@ function updateCalculations() {
 
   const items = p.items;
 
-  let totalBaseUSD = 0, totalTariffUSD = 0, totalLandedUSD = 0;
+  let totalBaseUSD = 0, totalShippingUSD = 0, totalTariffUSD = 0, totalLandedUSD = 0;
   items.forEach(item => {
     item.fxRate = getFxRate(item);
     item.unitPriceUSD = item.priceJPY * item.fxRate;
     item.itemCostUSD = item.unitPriceUSD * (item.qty || 1);
+    item.shippingUSD = item.shippingUSD || 0.00;
 
     if (item.tariffPercent === undefined) item.tariffPercent = p.tariffRate;
     item.tariffUSD = item.itemCostUSD * (item.tariffPercent / 100);
-    item.landedCostUSD = item.itemCostUSD + item.tariffUSD;
+    item.landedCostUSD = item.itemCostUSD + item.shippingUSD + item.tariffUSD;
 
     totalBaseUSD += item.itemCostUSD;
+    totalShippingUSD += item.shippingUSD;
     totalTariffUSD += item.tariffUSD;
     totalLandedUSD += item.landedCostUSD;
   });
@@ -387,6 +457,9 @@ function updateCalculations() {
 
   const statTotalUSD = document.getElementById('statTotalUSD');
   if (statTotalUSD) statTotalUSD.innerText = '$' + totalBaseUSD.toFixed(2);
+
+  const statTotalShipping = document.getElementById('statTotalShipping');
+  if (statTotalShipping) statTotalShipping.innerText = '$' + totalShippingUSD.toFixed(2);
 
   const statTariff = document.getElementById('statTotalTariff');
   if (statTariff) statTariff.innerText = '$' + totalTariffUSD.toFixed(2);
@@ -426,7 +499,8 @@ function renderTable() {
       <td class="p-3 text-right"><input type="number" value="${item.qty}" min="1" onchange="updateItemValue('${item.id}', 'qty', parseInt(this.value)||1)" class="w-12 bg-slate-900 text-right px-1 text-xs rounded"></td>
       <td class="p-3 text-right font-mono text-amber-300">$${(item.unitPriceUSD || 0).toFixed(2)}</td>
       <td class="p-3 text-right font-mono font-semibold text-sky-300">$${item.itemCostUSD.toFixed(2)}</td>
-      <td class="p-3 text-right"><input type="number" step="0.1" value="${item.tariffPercent}" onchange="updateItemValue('${item.id}', 'tariffPercent', parseFloat(this.value)||0)" class="w-14 bg-slate-900 text-right px-1 text-xs text-rose-300 rounded"></td>
+      <td class="p-3 text-right"><input type="number" step="0.01" value="${item.shippingUSD.toFixed(2)}" onchange="updateItemValue('${item.id}', 'shippingUSD', parseFloat(this.value)||0)" class="w-16 bg-slate-900 text-right px-1 text-xs text-amber-300 rounded"></td>
+      <td class="p-3 text-right"><input type="number" step="0.001" value="${item.tariffPercent}" onchange="updateItemValue('${item.id}', 'tariffPercent', parseFloat(this.value)||0)" class="w-16 bg-slate-900 text-right px-1 text-xs text-rose-300 rounded"></td>
       <td class="p-3 text-right font-mono text-rose-400">$${item.tariffUSD.toFixed(2)}</td>
       <td class="p-3 text-right font-mono font-bold text-emerald-400">$${item.landedCostUSD.toFixed(2)}</td>
       <td class="p-3 text-center"><button onclick="deleteSingleRow('${item.id}')" class="text-slate-400 hover:text-rose-400"><i data-lucide="x" class="w-4 h-4"></i></button></td>
@@ -447,7 +521,7 @@ function addNewRow() {
     id: String(Date.now() + Math.random()),
     orderDate: '7 Oct 2026', orderId: `ORD-${Math.floor(Math.random()*90000)}`,
     itemTitle: 'New Item Description', seller: 'Mercari Seller', qty: 1, priceJPY: 10000,
-    tariffPercent: p.tariffRate, selected: false
+    shippingUSD: 0.00, tariffPercent: p.tariffRate, selected: false
   });
   updateCalculations();
 }
@@ -463,8 +537,10 @@ function exportToExcel() {
   const exportData = items.map((item, idx) => ({
     'Row #': idx + 1, 'Date': item.orderDate, 'Order ID': item.orderId,
     'Item Title': item.itemTitle, 'Seller': item.seller, 'Qty': item.qty,
-    'Unit Price ($USD)': item.unitPriceUSD.toFixed(2),     'Base Cost ($ USD)': item.itemCostUSD.toFixed(2), 'Tariff Rate (%)': item.tariffPercent + '%',
-    'Tariff ($USD)': item.tariffUSD.toFixed(2), 'Landed Cost ($ USD)': item.landedCostUSD.toFixed(2)
+    'Unit Price ($ USD)': item.unitPriceUSD.toFixed(2),
+    'Base Cost ($USD)': item.itemCostUSD.toFixed(2),     'Shipping ($ USD)': item.shippingUSD.toFixed(2),
+    'Tariff Rate (%)': item.tariffPercent + '%',
+    'Tariff ($USD)': item.tariffUSD.toFixed(2),     'Landed Cost ($ USD)': item.landedCostUSD.toFixed(2)
   }));
   const ws = XLSX.utils.json_to_sheet(exportData);
   const wb = XLSX.utils.book_new();
