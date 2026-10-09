@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Buyee Landed Cost Inventory Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PDF.js for client-side PDF parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- SheetJS for Excel export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    .custom-scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+
+  <!-- Header -->
+  <header class="bg-slate-800/90 backdrop-blur border-b border-slate-700/80 sticky top-0 z-40 px-6 py-3.5 flex flex-wrap items-center justify-between shadow-lg">
+    <div class="flex items-center space-x-3">
+      <div class="bg-indigo-600 p-2 rounded-lg text-white shadow-md shadow-indigo-500/20">
+        <i data-lucide="calculator" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold text-white leading-tight">Buyee Landed Cost Portal</h1>
+        <p class="text-xs text-slate-400">Serverless Client-Side FX & Tariff Engine</p>
+      </div>
+    </div>
+
+    <div class="flex items-center space-x-2.5 mt-2 sm:mt-0">
+      <button onclick="exportBackupJSON()" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1">
+        <i data-lucide="save" class="w-3.5 h-3.5"></i>
+        <span>Backup JSON</span>
+      </button>
+
+      <label class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1 cursor-pointer">
+        <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+        <span>Restore Backup</span>
+        <input type="file" accept=".json" onchange="importBackupJSON(event)" class="hidden">
+      </label>
+
+      <button onclick="exportToExcel()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-md shadow-indigo-600/20">
+        <i data-lucide="file-spreadsheet" class="w-4 h-4"></i>
+        <span>Export Excel</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 max-w-[1700px] w-full mx-auto p-4 sm:p-6 space-y-6">
+
+    <!-- Active Project Bar -->
+    <div class="bg-slate-800 border border-slate-700/80 rounded-xl p-4 shadow-lg flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center space-x-3 w-full sm:w-auto">
+        <label class="text-xs font-semibold text-slate-300 flex items-center space-x-1">
+          <i data-lucide="folder" class="w-4 h-4 text-indigo-400"></i>
+          <span>Active Project:</span>
+        </label>
+        <select id="projectSelect" onchange="switchProject(this.value)" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </select>
+        <button onclick="createNewProjectPrompt()" class="px-2.5 py-1.5 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded-lg text-xs font-medium flex items-center space-x-1">
+          <i data-lucide="folder-plus" class="w-3.5 h-3.5"></i>
+          <span>New Project</span>
+        </button>
+        <button onclick="deleteCurrentProject()" class="px-2.5 py-1.5 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/60 rounded-lg text-xs font-medium">
+          Delete Project
+        </button>
+      </div>
+
+      <div class="flex items-center space-x-2 text-xs text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-3 py-1 rounded-lg">
+        <i data-lucide="database" class="w-3.5 h-3.5"></i>
+        <span>Saved locally in browser (`localStorage`)</span>
+      </div>
+    </div>
+
+    <!-- PDF Reader & Controls -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- PDF Dropzone -->
+      <div class="lg:col-span-5 bg-slate-800 border border-slate-700/80 rounded-xl p-5 shadow-lg flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-slate-200 flex items-center space-x-2">
+              <i data-lucide="file-text" class="w-4 h-4 text-indigo-400"></i>
+              <span>PDF Receipt Parser</span>
+            </h2>
+            <span class="text-[11px] bg-indigo-950 text-indigo-300 border border-indigo-700/50 px-2 py-0.5 rounded-full">PDF.js Engine</span>
+          </div>
+
+          <div id="dropZone" onclick="document.getElementById('pdfInput').click()" class="border-2 border-dashed border-slate-600 hover:border-indigo-500 bg-slate-800/60 hover:bg-slate-700/30 transition-all rounded-xl p-6 text-center cursor-pointer group">
+            <input type="file" id="pdfInput" accept="application/pdf" class="hidden" onchange="handleFileSelect(event)">
+            <div class="w-12 h-12 bg-slate-700 group-hover:bg-indigo-600/20 text-slate-300 group-hover:text-indigo-400 rounded-full flex items-center justify-center mx-auto mb-3 transition-colors">
+              <i data-lucide="upload-cloud" class="w-6 h-6"></i>
+            </div>
+            <p class="text-sm font-medium text-slate-200">Upload Buyee Receipt PDF</p>
+            <p class="text-xs text-slate-400 mt-1">Parses dates, order IDs, item prices, and USD rates</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cost Allocation Controls -->
+      <div class="lg:col-span-7 bg-slate-800 border border-slate-700/80 rounded-xl p-5 shadow-lg space-y-4">
+        <h2 class="text-sm font-semibold text-slate-200 flex items-center space-x-2 border-b border-slate-700/60 pb-2">
+          <i data-lucide="sliders" class="w-4 h-4 text-emerald-400"></i>
+          <span>Cost Allocation & FX Controls</span>
+        </h2>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-slate-300">Default Tariff %</label>
+            <div class="relative">
+              <input type="number" id="globalTariffInput" value="10" step="0.5" oninput="updateCalculations()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8">
+              <span class="absolute right-3 top-2.5 text-xs text-slate-400 font-bold">%</span>
+            </div>
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-slate-300">Total Freight ($ USD)</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-xs text-slate-400">$</span>
+              <input type="number" id="globalShippingInput" value="0" step="1" oninput="updateCalculations()" class="w-full bg-slate-900 border border-slate-700 rounded-lg pl-7 pr-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-slate-300">Total Fees ($ USD)</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-xs text-slate-400">$</span>
+              <input type="number" id="globalFeesInput" value="0" step="1" oninput="updateCalculations()" class="w-full bg-slate-900 border border-slate-700 rounded-lg pl-7 pr-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-700/60 pt-3">
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-slate-300">Allocation Strategy</label>
+            <select id="allocationStrategy" onchange="updateCalculations()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              <option value="proportional">Proportional to Item Value</option>
+              <option value="equal">Equal Split Per Item</option>
+            </select>
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-slate-300">Currency Conversion Mode</label>
+            <select id="fxMode" onchange="updateCalculations()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              <option value="receipt">Use Receipt FX Rate (Fallback to Purchase Date)</option>
+              <option value="historical">Exact Historical Date Lookup FX</option>
+              <option value="fixed">Fixed Rate (1 USD = 150 JPY)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Metrics Bar -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+      <div class="bg-slate-800 border border-slate-700/80 rounded-xl p-3.5 shadow-sm">
+        <p class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Total Items</p>
+        <p id="statCount" class="text-xl font-bold text-white mt-1">0</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700/80 rounded-xl p-3.5 shadow-sm">
+        <p class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Total JPY</p>
+        <p id="statTotalJPY" class="text-xl font-bold text-amber-400 mt-1">¥0</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700/80 rounded-xl p-3.5 shadow-sm">
+        <p class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Base Cost ($ USD)</p>
+        <p id="statTotalUSD" class="text-xl font-bold text-sky-400 mt-1">$0.00</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700/80 rounded-xl p-3.5 shadow-sm">
+        <p class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Freight & Fees</p>
+        <p id="statTotalFreightFees" class="text-xl font-bold text-indigo-400 mt-1">$0.00</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700/80 rounded-xl p-3.5 shadow-sm">
+        <p class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Tariffs ($ USD)</p>
+        <p id="statTotalTariff" class="text-xl font-bold text-rose-400 mt-1">$0.00</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700/80 rounded-xl p-3.5 shadow-sm bg-gradient-to-br from-slate-800 to-indigo-950/40">
+        <p class="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold">Total Landed Cost</p>
+        <p id="statTotalLanded" class="text-xl font-bold text-emerald-400 mt-1">$0.00</p>
+      </div>
+    </div>
+
+    <!-- Data Table -->
+    <div class="bg-slate-800 border border-slate-700/80 rounded-xl shadow-lg overflow-hidden flex flex-col">
+      <div class="p-4 border-b border-slate-700/80 flex flex-wrap items-center justify-between gap-3 bg-slate-800/80">
+        <div class="relative w-full sm:w-80">
+          <i data-lucide="search" class="w-4 h-4 absolute left-3 top-2.5 text-slate-400"></i>
+          <input type="text" id="searchInput" oninput="renderTable()" placeholder="Search active project..." class="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+
+        <div class="flex items-center space-x-2">
+          <button onclick="addNewRow()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium flex items-center space-x-1">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            <span>Add Row</span>
+          </button>
+          <button onclick="deleteSelectedRows()" class="px-3 py-1.5 bg-rose-600/80 hover:bg-rose-600 text-white rounded-lg text-xs font-medium">Delete Selected</button>
+          <button onclick="clearAllItems()" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg text-xs font-medium">Clear Data</button>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto custom-scrollbar max-h-[600px] overflow-y-auto">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead class="bg-slate-900/90 text-slate-400 sticky top-0 z-20 border-b border-slate-700 uppercase tracking-wider font-semibold">
+            <tr>
+              <th class="p-3 text-center w-10"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)"></th>
+              <th class="p-3 min-w-[90px]">Order Date</th>
+              <th class="p-3 min-w-[110px]">Order ID</th>
+              <th class="p-3 min-w-[240px]">Description</th>
+              <th class="p-3 min-w-[130px]">Seller</th>
+              <th class="p-3 text-right min-w-[60px]">Qty</th>
+              <th class="p-3 text-right min-w-[100px]">Price (JPY)</th>
+              <th class="p-3 text-right min-w-[90px]">FX ($/¥)</th>
+              <th class="p-3 text-right min-w-[100px]">Base Cost ($)</th>
+              <th class="p-3 text-right min-w-[80px]">Ship ($)</th>
+              <th class="p-3 text-right min-w-[80px]">Fees ($)</th>
+              <th class="p-3 text-right min-w-[80px]">Tariff %</th>
+              <th class="p-3 text-right min-w-[90px]">Tariff ($)</th>
+              <th class="p-3 text-right min-w-[110px]">Landed Cost ($)</th>
+              <th class="p-3 text-center w-12">Action</th>
+            </tr>
+          </thead>
+          <tbody id="inventoryTbody" class="divide-y divide-slate-700/60"></tbody>
+        </table>
+      </div>
+      <div class="px-4 py-2.5 bg-slate-900/70 border-t border-slate-700/80 text-xs text-slate-400 flex justify-between">
+        <span id="displayedCountText">Showing 0 items</span>
+        <span>Standalone Client App</span>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
