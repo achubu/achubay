@@ -235,3 +235,70 @@ function updateMetrics() {
   document.getElementById('metricNetCost').textContent = `¥${currentParsedData.totalNetItemsCost.toLocaleString()}`;
   document.getElementById('metricShipping').textContent = `¥${currentParsedData.intlShipping.toLocaleString()}`;
   document.getElementById('metricDuty').textContent = `¥${currentParsedData.customsDuty.toLocaleString()}`;
+  document.getElementById('metricGrandTotal').textContent = `¥${currentParsedData.grandTotalLanded.toLocaleString()}`;
+}
+
+function renderTable(filterQuery = '') {
+  const tbody = document.getElementById('manifestTableBody');
+  tbody.innerHTML = '';
+
+  if (!currentParsedData || currentParsedData.items.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-500">No line items found in manifest.</td></tr>`;
+    return;
+  }
+
+  const filtered = currentParsedData.items.filter(item => {
+    return item.orderId.toLowerCase().includes(filterQuery) ||
+           item.itemName.toLowerCase().includes(filterQuery) ||
+           item.siteName.toLowerCase().includes(filterQuery);
+  });
+
+  filtered.forEach(item => {
+    const tr = document.createElement('tr');
+    tr.className = "hover:bg-slate-800/40 transition-colors";
+    tr.innerHTML = `
+      <td class="p-3 text-slate-200 font-semibold">${escapeHtml(item.orderId)}</td>
+      <td class="p-3 text-slate-400">${escapeHtml(item.siteName)}</td>
+      <td class="p-3 text-slate-100 max-w-xs truncate" title="${escapeHtml(item.itemName)}">${escapeHtml(item.itemName)}</td>
+      <td class="p-3 text-right text-slate-400">¥${item.origPrice.toLocaleString()}</td>
+      <td class="p-3 text-right text-emerald-400 font-medium">¥${item.netPrice.toLocaleString()}</td>
+      <td class="p-3 text-right text-blue-400">+¥${item.splitShipping.toLocaleString()}</td>
+      <td class="p-3 text-right text-amber-400">+¥${item.splitDuty.toLocaleString()}</td>
+      <td class="p-3 text-right text-slate-400">+¥${item.splitFees.toLocaleString()}</td>
+      <td class="p-3 text-right text-purple-300 font-bold bg-purple-950/20">¥${item.landedCost.toLocaleString()}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  lucide.createIcons();
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function exportToCSV() {
+  if (!currentParsedData) return;
+  const headers = ["Package Ref", "Date", "Order ID", "Site Name", "Item Name", "Qty", "Base Price", "Net Price", "Split Shipping", "Split Duty", "Split Fees", "Total Landed Cost"];
+  const rows = currentParsedData.items.map(i => [
+    currentParsedData.packageRef, currentParsedData.delivDate, `"${i.orderId}"`, `"${i.siteName}"`, `"${i.itemName.replace(/"/g, '""')}"`, i.qty, i.origPrice, i.netPrice, i.splitShipping, i.splitDuty, i.splitFees, i.landedCost
+  ]);
+  const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+  const link = document.createElement('a');
+  link.setAttribute('href', encodeURI(csvContent));
+  link.setAttribute('download', `Buyee_Landed_Cost_${currentParsedData.packageRef}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function exportToJSON() {
+  if (!currentParsedData) return;
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentParsedData, null, 2));
+  const link = document.createElement('a');
+  link.setAttribute("href", dataStr);
+  link.setAttribute("download", `Buyee_Landed_Cost_${currentParsedData.packageRef}.json`);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
